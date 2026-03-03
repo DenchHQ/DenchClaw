@@ -94,12 +94,6 @@ describe("workspace utilities", () => {
     };
   }
 
-  /** Set up mocks so resolveWorkspaceRoot() returns WS_DIR via OPENCLAW_WORKSPACE env. */
-  function useEnvWorkspace(mockExists: ReturnType<typeof vi.mocked<typeof existsSync>>) {
-    process.env.OPENCLAW_WORKSPACE = WS_DIR;
-    mockExists.mockImplementation((p) => String(p) === WS_DIR);
-  }
-
   // ─── resolveWorkspaceRoot ────────────────────────────────────────
 
   describe("resolveWorkspaceRoot", () => {

@@ -111,8 +111,8 @@ describe("POST /api/workspace/init", () => {
     const workspaceDir = join(STATE_DIR, "workspace-work");
     vi.mocked(existsSync).mockImplementation((p) => {
       const s = String(p);
-      if (s.endsWith("docs/reference/templates/AGENTS.md")) return true;
-      if (s.endsWith("skills/dench/SKILL.md")) return true;
+      if (s.endsWith("docs/reference/templates/AGENTS.md")) {return true;}
+      if (s.endsWith("skills/dench/SKILL.md")) {return true;}
       return false;
     });
 
@@ -142,7 +142,7 @@ describe("POST /api/workspace/init", () => {
 
     vi.mocked(existsSync).mockImplementation((p) => {
       const s = String(p);
-      if (s.endsWith("docs/reference/templates/AGENTS.md")) return true;
+      if (s.endsWith("docs/reference/templates/AGENTS.md")) {return true;}
       return false;
     });
 
@@ -155,7 +155,8 @@ describe("POST /api/workspace/init", () => {
       (call) => String(call[0]).endsWith("IDENTITY.md"),
     );
     expect(identityWrites.length).toBeGreaterThan(0);
-    const identityContent = String(identityWrites[identityWrites.length - 1][1]);
+    const raw = identityWrites[identityWrites.length - 1][1];
+    const identityContent = typeof raw === "string" ? raw : JSON.stringify(raw);
     expect(identityContent).toContain(expectedSkillPath);
     expect(identityContent).toContain("Ironclaw");
     expect(identityContent).not.toContain("~skills");
