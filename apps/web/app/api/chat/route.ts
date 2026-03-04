@@ -9,7 +9,6 @@ import {
 	persistUserMessage,
 	persistSubscribeUserMessage,
 	reactivateSubscribeRun,
-	sendSubagentFollowUp,
 	type SseEvent,
 } from "@/lib/active-runs";
 import { existsSync, readFileSync } from "node:fs";
@@ -100,10 +99,7 @@ export async function POST(req: Request) {
 			id: lastUserMessage.id,
 			text: userText,
 		});
-		reactivateSubscribeRun(sessionKey);
-		if (!sendSubagentFollowUp(sessionKey, agentMessage)) {
-			return new Response("Failed to send subagent message", { status: 500 });
-		}
+		reactivateSubscribeRun(sessionKey, agentMessage);
 	} else if (sessionId && lastUserMessage) {
 		persistUserMessage(sessionId, {
 			id: lastUserMessage.id,
@@ -144,6 +140,9 @@ export async function POST(req: Request) {
 						try { controller.close(); } catch { /* already closed */ }
 						return;
 					}
+					// Skip custom event types not in the AI SDK v6 data stream schema;
+					// they're only consumed by the reconnection parser (processEvent).
+					if (event.type === "tool-output-partial") {return;}
 					try {
 						const json = JSON.stringify(event);
 						controller.enqueue(encoder.encode(`data: ${json}\n\n`));

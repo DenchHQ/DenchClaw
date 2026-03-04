@@ -22,6 +22,7 @@ import {
 	type AgentEvent,
 	spawnAgentProcess,
 	spawnAgentSubscribeProcess,
+	spawnAgentStartForSession,
 	callGatewayRpc,
 	extractToolResult,
 	buildToolOutput,
@@ -285,7 +286,7 @@ export function subscribeToRun(
  * Reactivate a completed subscribe-only run for a follow-up message.
  * Resets status to "running" and restarts the subscribe stream.
  */
-export function reactivateSubscribeRun(sessionKey: string): boolean {
+export function reactivateSubscribeRun(sessionKey: string, message?: string): boolean {
 	const run = activeRuns.get(sessionKey);
 	if (!run?.isSubscribeOnly) {return false;}
 	if (run.status === "running") {return true;}
@@ -295,6 +296,7 @@ export function reactivateSubscribeRun(sessionKey: string): boolean {
 	if (run._finalizeTimer) {clearTimeout(run._finalizeTimer); run._finalizeTimer = null;}
 	clearWaitingFinalizeTimer(run);
 	resetSubscribeRetryState(run);
+	stopSubscribeProcess(run);
 
 	run.accumulated = {
 		id: `assistant-${sessionKey}-${Date.now()}`,
@@ -302,7 +304,12 @@ export function reactivateSubscribeRun(sessionKey: string): boolean {
 		parts: [],
 	};
 
-	const newChild = spawnAgentSubscribeProcess(sessionKey, run.lastGlobalSeq);
+	// When a follow-up message is provided, use start mode so the `agent`
+	// RPC streams ALL events (including tool events) on the same connection.
+	// In passive subscribe mode, tool events are not broadcast by the gateway.
+	const newChild = message
+		? spawnAgentStartForSession(message, sessionKey)
+		: spawnAgentSubscribeProcess(sessionKey, run.lastGlobalSeq);
 	run._subscribeProcess = newChild;
 	run.childProcess = newChild;
 	wireSubscribeOnlyProcess(run, newChild, sessionKey);
@@ -512,6 +519,15 @@ export function startSubscribeRun(params: {
 		return activeRuns.get(sessionKey)!;
 	}
 
+	// Patch verbose level BEFORE spawning the subscribe process so tool
+	// events are generated for events that occur after this point.
+	// The subscribe process also patches, but this gives us a head start.
+	void callGatewayRpc(
+		"sessions.patch",
+		{ key: sessionKey, verboseLevel: "full", reasoningLevel: "on" },
+		{ timeoutMs: 4_000 },
+	).catch(() => {});
+
 	const abortController = new AbortController();
 	const subscribeChild = spawnAgentSubscribeProcess(sessionKey, 0);
 
@@ -718,7 +734,6 @@ function wireSubscribeOnlyProcess(
 			const phase = typeof ev.data?.phase === "string" ? ev.data.phase : undefined;
 			const toolCallId = typeof ev.data?.toolCallId === "string" ? ev.data.toolCallId : "";
 			const toolName = typeof ev.data?.name === "string" ? ev.data.name : "";
-
 			if (phase === "start") {
 				closeReasoning();
 				closeText();
@@ -879,11 +894,107 @@ function wireSubscribeOnlyProcess(
 	run._subscribeProcess = child;
 }
 
+/**
+ * When the subscribe process doesn't receive tool events (gateway
+ * `agent.subscribe` unsupported), backfill tool-invocation parts from
+ * the gateway's on-disk session transcript.
+ */
+function enrichFromGatewayTranscript(run: ActiveRun): void {
+	if (!run.isSubscribeOnly || !run.sessionKey) {return;}
+	if (run.accumulated.parts.some((p) => p.type === "tool-invocation")) {return;}
+
+	try {
+		const stateDir = resolveOpenClawStateDir();
+		const agentId = resolveActiveAgentId();
+		const sessionsJsonPath = join(stateDir, "agents", agentId, "sessions", "sessions.json");
+		if (!existsSync(sessionsJsonPath)) {return;}
+
+		const sessions = JSON.parse(readFileSync(sessionsJsonPath, "utf-8")) as Record<string, Record<string, unknown>>;
+		const sessionData = sessions[run.sessionKey];
+		const sessionId = typeof sessionData?.sessionId === "string" ? sessionData.sessionId : null;
+		if (!sessionId) {return;}
+
+		const transcriptPath = join(stateDir, "agents", agentId, "sessions", `${sessionId}.jsonl`);
+		if (!existsSync(transcriptPath)) {return;}
+
+		const entries = readFileSync(transcriptPath, "utf-8")
+			.split("\n")
+			.filter((l) => l.trim())
+			.map((l) => { try { return JSON.parse(l); } catch { return null; } })
+			.filter(Boolean) as Array<Record<string, unknown>>;
+
+		const toolParts: AccumulatedPart[] = [];
+		const toolResults = new Map<string, Record<string, unknown>>();
+
+		for (const entry of entries) {
+			if (entry.type !== "message") {continue;}
+			const msg = entry.message as Record<string, unknown> | undefined;
+			if (!msg) {continue;}
+			const content = msg.content;
+
+			if (msg.role === "toolResult" && typeof msg.toolCallId === "string") {
+				const text = Array.isArray(content)
+					? (content as Array<Record<string, unknown>>)
+						.filter((c) => c.type === "text" && typeof c.text === "string")
+						.map((c) => c.text as string)
+						.join("\n")
+					: typeof content === "string" ? content : "";
+				toolResults.set(msg.toolCallId, { text: text.slice(0, 500) });
+			}
+
+			if (Array.isArray(content)) {
+				for (const part of content as Array<Record<string, unknown>>) {
+					if (part.type === "toolCall" && typeof part.id === "string" && typeof part.name === "string") {
+						toolParts.push({
+							type: "tool-invocation",
+							toolCallId: part.id,
+							toolName: part.name,
+							args: (part.arguments as Record<string, unknown>) ?? {},
+						});
+					}
+				}
+			}
+		}
+
+		if (toolParts.length === 0) {return;}
+
+		for (const tp of toolParts) {
+			if (tp.type === "tool-invocation") {
+				const result = toolResults.get(tp.toolCallId);
+				if (result) { tp.result = result; }
+			}
+		}
+
+		const textParts = run.accumulated.parts.filter((p) => p.type === "text");
+		const nonTextParts = run.accumulated.parts.filter((p) => p.type !== "text");
+		run.accumulated.parts = [...nonTextParts, ...toolParts, ...textParts];
+
+		// Also emit SSE events for tool parts so reconnecting clients see them
+		for (const tp of toolParts) {
+			if (tp.type === "tool-invocation") {
+				const toolEvent = { type: "tool-input-start", toolCallId: tp.toolCallId, toolName: tp.toolName };
+				run.eventBuffer.push(toolEvent);
+				const inputEvent = { type: "tool-input-available", toolCallId: tp.toolCallId, toolName: tp.toolName, input: tp.args };
+				run.eventBuffer.push(inputEvent);
+				if (tp.result) {
+					const outputEvent = { type: "tool-output-available", toolCallId: tp.toolCallId, output: tp.result };
+					run.eventBuffer.push(outputEvent);
+				}
+			}
+		}
+
+	} catch {
+		// Best effort -- don't break finalization
+	}
+}
+
 function finalizeSubscribeRun(run: ActiveRun, status: "completed" | "error" = "completed"): void {
 	if (run.status !== "running") { return; }
 	if (run._finalizeTimer) { clearTimeout(run._finalizeTimer); run._finalizeTimer = null; }
 	clearWaitingFinalizeTimer(run);
 	resetSubscribeRetryState(run);
+
+	enrichFromGatewayTranscript(run);
 
 	run.status = status;
 	flushPersistence(run);

@@ -185,6 +185,7 @@ type SpawnGatewayProcessParams = {
 	message?: string;
 	sessionKey?: string;
 	afterSeq: number;
+	lane?: string;
 };
 
 type BuildConnectParamsOptions = {
@@ -596,7 +597,7 @@ class GatewayProcessHandle
 					...(sessionKey ? { sessionKey } : {}),
 					deliver: false,
 					channel: "webchat",
-					lane: "web",
+					lane: this.params.lane ?? "web",
 					timeout: 0,
 				});
 				if (!startRes.ok) {
@@ -947,6 +948,24 @@ export function spawnAgentSubscribeProcess(
 		mode: "subscribe",
 		sessionKey,
 		afterSeq: Math.max(0, Number.isFinite(afterSeq) ? afterSeq : 0),
+	});
+}
+
+/**
+ * Spawn a start-mode agent process for a subagent follow-up message.
+ * Uses the `agent` RPC which receives ALL events (including tool events)
+ * on the same WebSocket connection, unlike passive subscribe mode.
+ */
+export function spawnAgentStartForSession(
+	message: string,
+	sessionKey: string,
+): AgentProcessHandle {
+	return new GatewayProcessHandle({
+		mode: "start",
+		message,
+		sessionKey,
+		afterSeq: 0,
+		lane: "subagent",
 	});
 }
 
