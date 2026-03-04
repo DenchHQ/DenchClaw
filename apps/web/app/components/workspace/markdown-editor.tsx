@@ -17,6 +17,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 
 import { ReportBlockNode, preprocessReportBlocks, postprocessReportBlocks } from "./report-block-node";
 import { createSlashCommand, createWorkspaceMention, createFileMention, type TreeNode, type MentionSearchFn } from "./slash-command";
+import { ToolbarGroup, ToolbarDivider, ToolbarButton, BubbleButton } from "./editor-toolbar-primitives";
 import { isWorkspaceLink } from "@/lib/workspace-links";
 
 // --- Types ---
@@ -654,60 +655,5 @@ function EditorToolbar({
   );
 }
 
-// --- Toolbar primitives ---
-
-function ToolbarGroup({ children }: { children: React.ReactNode }) {
-  return <div className="editor-toolbar-group">{children}</div>;
-}
-
-function ToolbarDivider() {
-  return <div className="editor-toolbar-divider" />;
-}
-
-function ToolbarButton({
-  active,
-  onClick,
-  title,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      className={`editor-toolbar-btn ${active ? "editor-toolbar-btn-active" : ""}`}
-      onClick={onClick}
-      title={title}
-    >
-      {children}
-    </button>
-  );
-}
-
-// --- Bubble menu button ---
-
-function BubbleButton({
-  active,
-  onClick,
-  title,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      className={`bubble-menu-btn ${active ? "bubble-menu-btn-active" : ""}`}
-      onClick={onClick}
-      title={title}
-    >
-      {children}
-    </button>
-  );
-}
+// Toolbar primitives shared with rich-document-editor
+export { ToolbarGroup, ToolbarDivider, ToolbarButton, BubbleButton };
