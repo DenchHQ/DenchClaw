@@ -7,7 +7,7 @@ const POSTHOG_HOST = "https://us.i.posthog.com";
 
 let client: PostHog | null = null;
 
-function getAnonymousId(): string {
+export function getAnonymousId(): string {
   try {
     const raw = `${os.hostname()}:${os.userInfo().username}`;
     return createHash("sha256").update(raw).digest("hex").slice(0, 16);

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Suspense } from "react";
+import { getAnonymousId } from "@/lib/telemetry";
 import { PostHogPageviewTracker } from "./components/posthog-provider";
 import "./globals.css";
 
@@ -42,7 +43,7 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         <Suspense fallback={null}>
-          <PostHogPageviewTracker />
+          <PostHogPageviewTracker anonymousId={getAnonymousId()} />
         </Suspense>
         {children}
       </body>

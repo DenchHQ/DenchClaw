@@ -9,11 +9,15 @@ const POSTHOG_HOST = "https://us.i.posthog.com";
 
 let initialized = false;
 
-function initPostHog() {
+function initPostHog(anonymousId: string) {
   if (initialized || !POSTHOG_KEY || typeof window === "undefined") return;
 
   posthog.init(POSTHOG_KEY, {
     api_host: POSTHOG_HOST,
+    bootstrap: {
+      distinctID: anonymousId,
+      isIdentifiedID: false,
+    },
     capture_pageview: false,
     capture_pageleave: true,
     persistence: "memory",
@@ -24,12 +28,12 @@ function initPostHog() {
   initialized = true;
 }
 
-export function PostHogPageviewTracker() {
+export function PostHogPageviewTracker({ anonymousId }: { anonymousId: string }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    initPostHog();
+    initPostHog(anonymousId);
   }, []);
 
   useEffect(() => {
