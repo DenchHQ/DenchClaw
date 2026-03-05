@@ -44,7 +44,7 @@ type SpawnCall = {
 
 function createWebProfilesResponse(params?: {
   status?: number;
-  payload?: { profiles?: unknown[]; activeProfile?: string };
+  payload?: { profiles?: unknown[]; activeProfile?: string | null };
 }): Response {
   const status = params?.status ?? 200;
   const payload = params?.payload ?? { profiles: [], activeProfile: "dench" };
@@ -98,15 +98,18 @@ function createMockChild(params: {
   stdout: EventEmitter;
   stderr: EventEmitter;
   kill: ReturnType<typeof vi.fn>;
+  unref: ReturnType<typeof vi.fn>;
 } {
   const child = new EventEmitter() as EventEmitter & {
     stdout: EventEmitter;
     stderr: EventEmitter;
     kill: ReturnType<typeof vi.fn>;
+    unref: ReturnType<typeof vi.fn>;
   };
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn();
+  child.unref = vi.fn();
 
   queueMicrotask(() => {
     if (params.stdout) {
@@ -411,6 +414,41 @@ describe("bootstrapCommand always-onboard behavior", () => {
     expect(updateIndex).toBeLessThan(onboardIndex);
   });
 
+  it("skips update prompt right after installing openclaw@latest (avoids redundant update checks)", async () => {
+    forceGlobalMissing = true;
+    promptMocks.confirmDecision = true;
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await withForcedStdinTty(true, async () => {
+      await bootstrapCommand(
+        {
+          noOpen: true,
+        },
+        runtime,
+      );
+    });
+
+    const installedGlobalOpenClaw = spawnCalls.some(
+      (call) =>
+        call.command === "npm" &&
+        call.args.includes("install") &&
+        call.args.includes("-g") &&
+        call.args.includes("openclaw@latest"),
+    );
+    const updateCalled = spawnCalls.some(
+      (call) =>
+        call.command === "openclaw" && call.args.includes("update") && call.args.includes("--yes"),
+    );
+
+    expect(installedGlobalOpenClaw).toBe(true);
+    expect(promptMocks.confirm).toHaveBeenCalledTimes(0);
+    expect(updateCalled).toBe(false);
+  });
+
   it("skips update when interactive prompt is declined", async () => {
     promptMocks.confirmDecision = false;
     const runtime: RuntimeEnv = {
@@ -439,6 +477,87 @@ describe("bootstrapCommand always-onboard behavior", () => {
 
     expect(updateCalled).toBe(false);
     expect(onboardCalls).toHaveLength(1);
+  });
+
+  it("reuses recent OpenClaw CLI availability checks to avoid repeated npm/which probes", async () => {
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await bootstrapCommand(
+      {
+        nonInteractive: true,
+        noOpen: true,
+        skipUpdate: true,
+      },
+      runtime,
+    );
+
+    const firstProbeCounts = {
+      npmLs: spawnCalls.filter(
+        (call) =>
+          call.command === "npm" &&
+          call.args.includes("ls") &&
+          call.args.includes("-g") &&
+          call.args.includes("openclaw"),
+      ).length,
+      npmPrefix: spawnCalls.filter(
+        (call) =>
+          call.command === "npm" && call.args.includes("prefix") && call.args.includes("-g"),
+      ).length,
+      shellWhich: spawnCalls.filter(
+        (call) =>
+          (call.command === "which" || call.command === "where") && call.args[0] === "openclaw",
+      ).length,
+      versionCheck: spawnCalls.filter(
+        (call) => call.command === "openclaw" && call.args[0] === "--version",
+      ).length,
+    };
+
+    spawnCalls = [];
+
+    await bootstrapCommand(
+      {
+        nonInteractive: true,
+        noOpen: true,
+        skipUpdate: true,
+      },
+      runtime,
+    );
+
+    const secondProbeCounts = {
+      npmLs: spawnCalls.filter(
+        (call) =>
+          call.command === "npm" &&
+          call.args.includes("ls") &&
+          call.args.includes("-g") &&
+          call.args.includes("openclaw"),
+      ).length,
+      npmPrefix: spawnCalls.filter(
+        (call) =>
+          call.command === "npm" && call.args.includes("prefix") && call.args.includes("-g"),
+      ).length,
+      shellWhich: spawnCalls.filter(
+        (call) =>
+          (call.command === "which" || call.command === "where") && call.args[0] === "openclaw",
+      ).length,
+      versionCheck: spawnCalls.filter(
+        (call) => call.command === "openclaw" && call.args[0] === "--version",
+      ).length,
+    };
+
+    expect(firstProbeCounts.npmLs).toBeGreaterThan(0);
+    expect(firstProbeCounts.npmPrefix).toBeGreaterThan(0);
+    expect(firstProbeCounts.shellWhich).toBeGreaterThan(0);
+    expect(firstProbeCounts.versionCheck).toBeGreaterThan(0);
+    expect(secondProbeCounts).toEqual({
+      npmLs: 0,
+      npmPrefix: 0,
+      shellWhich: 0,
+      versionCheck: 0,
+    });
   });
 
   it("seeds workspace.duckdb on bootstrap when missing", async () => {
@@ -909,6 +1028,35 @@ describe("bootstrapCommand always-onboard behavior", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0] ?? "").includes(":3101/"))).toBe(
       false,
     );
+  });
+
+  it("accepts nullable activeProfile in /api/profiles payload (prevents first-run false-negative readiness)", async () => {
+    fetchBehavior = async (url: string) => {
+      if (url.includes("127.0.0.1:3100/api/profiles")) {
+        return createWebProfilesResponse({
+          status: 200,
+          payload: { profiles: [], activeProfile: null },
+        });
+      }
+      return createWebProfilesResponse({ status: 404, payload: {} });
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const summary = await bootstrapCommand(
+      {
+        nonInteractive: true,
+        noOpen: true,
+        skipUpdate: true,
+      },
+      runtime,
+    );
+
+    expect(summary.webReachable).toBe(true);
+    expect(summary.diagnostics.checks.find((check) => check.id === "web-ui")?.status).toBe("pass");
   });
 
   it("prints likely gateway cause with log excerpt when autofix cannot recover", async () => {

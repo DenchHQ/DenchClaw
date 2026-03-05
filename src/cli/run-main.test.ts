@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   rewriteBareArgvToBootstrap,
+  shouldHideCliBanner,
   shouldEnableBootstrapCutover,
   shouldEnsureCliPath,
   shouldDelegateToGlobalOpenClaw,
@@ -60,6 +61,9 @@ describe("run-main delegation and path guards", () => {
   it("delegates non-bootstrap commands by default and never delegates bootstrap", () => {
     expect(shouldDelegateToGlobalOpenClaw(["node", "denchclaw", "chat"])).toBe(true);
     expect(shouldDelegateToGlobalOpenClaw(["node", "denchclaw", "bootstrap"])).toBe(false);
+    expect(shouldDelegateToGlobalOpenClaw(["node", "denchclaw", "update"])).toBe(false);
+    expect(shouldDelegateToGlobalOpenClaw(["node", "denchclaw", "stop"])).toBe(false);
+    expect(shouldDelegateToGlobalOpenClaw(["node", "denchclaw", "start"])).toBe(false);
     expect(shouldDelegateToGlobalOpenClaw(["node", "denchclaw"])).toBe(false);
   });
 
@@ -74,5 +78,19 @@ describe("run-main delegation and path guards", () => {
         OPENCLAW_DISABLE_OPENCLAW_DELEGATION: "true",
       }),
     ).toBe(false);
+  });
+});
+
+describe("run-main banner visibility", () => {
+  it("keeps banner visible for update/start/stop lifecycle commands", () => {
+    expect(shouldHideCliBanner(["node", "denchclaw", "update"])).toBe(false);
+    expect(shouldHideCliBanner(["node", "denchclaw", "start"])).toBe(false);
+    expect(shouldHideCliBanner(["node", "denchclaw", "stop"])).toBe(false);
+  });
+
+  it("hides banner only for completion and plugin-update helper commands", () => {
+    expect(shouldHideCliBanner(["node", "denchclaw", "completion"])).toBe(true);
+    expect(shouldHideCliBanner(["node", "denchclaw", "plugins", "update"])).toBe(true);
+    expect(shouldHideCliBanner(["node", "denchclaw", "chat"])).toBe(false);
   });
 });

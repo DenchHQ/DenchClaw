@@ -15,6 +15,9 @@ const ROOT_COMMANDS_HINT =
   "Hint: commands suffixed with * have subcommands. Run <command> --help for details.";
 
 const EXAMPLES = [
+  ["openclaw start --web-port 3100", "Start the managed web runtime without replacing assets."],
+  ["openclaw update", "Refresh the managed web runtime and enforce major upgrade gates."],
+  ["openclaw stop --web-port 3100", "Stop only the managed web runtime on a specific port."],
   ["openclaw models --help", "Show detailed help for the models command."],
   [
     "openclaw channels login --verbose",

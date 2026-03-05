@@ -127,7 +127,19 @@ export function shouldDelegateToGlobalOpenClaw(
   if (!primary) {
     return false;
   }
-  return primary !== "bootstrap";
+  return (
+    primary !== "bootstrap" && primary !== "update" && primary !== "stop" && primary !== "start"
+  );
+}
+
+export function shouldHideCliBanner(argv: string[], env: NodeJS.ProcessEnv = process.env): boolean {
+  const commandPath = getCommandPath(argv, 2);
+  return (
+    isTruthyEnvValue(env.DENCHCLAW_HIDE_BANNER) ||
+    isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER) ||
+    commandPath[0] === "completion" ||
+    (commandPath[0] === "plugins" && commandPath[1] === "update")
+  );
 }
 
 async function delegateToGlobalOpenClaw(argv: string[]): Promise<number> {
@@ -189,14 +201,7 @@ export async function runCli(argv: string[] = process.argv) {
   // Show the animated DenchClaw banner early so it appears for ALL invocations
   // (bare `denchclaw`, subcommands, help, etc.). The bannerEmitted flag inside
   // emitCliBanner prevents double-emission from the route / preAction hooks.
-  const commandPath = getCommandPath(normalizedArgv, 2);
-  const hideBanner =
-    isTruthyEnvValue(process.env.DENCHCLAW_HIDE_BANNER) ||
-    isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
-    commandPath[0] === "update" ||
-    commandPath[0] === "completion" ||
-    (commandPath[0] === "plugins" && commandPath[1] === "update");
-  if (!hideBanner) {
+  if (!shouldHideCliBanner(normalizedArgv, process.env)) {
     await emitCliBanner(VERSION, { argv: normalizedArgv });
   }
 

@@ -1,29 +1,33 @@
 import { spawn, type StdioOptions } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readFileSync, readdirSync } from "node:fs";
-import os from "node:os";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { confirm, isCancel, spinner } from "@clack/prompts";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { stylePromptMessage } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
+import { VERSION } from "../version.js";
 import { applyCliProfileEnv } from "./profile.js";
+import {
+  DEFAULT_WEB_APP_PORT,
+  ensureManagedWebRuntime,
+  resolveCliPackageRoot,
+  resolveProfileStateDir,
+} from "./web-runtime.js";
 import { seedWorkspaceFromAssets, type WorkspaceSeedResult } from "./workspace-seed.js";
 
 const DEFAULT_DENCHCLAW_PROFILE = "dench";
-const DENCHCLAW_STATE_DIRNAME = ".openclaw-dench";
 const DEFAULT_GATEWAY_PORT = 18789;
 const DENCHCLAW_GATEWAY_PORT_START = 19001;
 const MAX_PORT_SCAN_ATTEMPTS = 100;
-const DEFAULT_WEB_APP_PORT = 3100;
-const WEB_APP_PROBE_ATTEMPTS = 20;
-const WEB_APP_PROBE_DELAY_MS = 750;
 const DEFAULT_BOOTSTRAP_ROLLOUT_STAGE = "default";
 const DEFAULT_GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
 const REQUIRED_TOOLS_PROFILE = "full";
+const OPENCLAW_CLI_CHECK_CACHE_TTL_MS = 5 * 60_000;
+const OPENCLAW_UPDATE_PROMPT_SUPPRESS_AFTER_INSTALL_MS = 5 * 60_000;
+const OPENCLAW_CLI_CHECK_CACHE_FILE = "openclaw-cli-check.json";
+const OPENCLAW_SETUP_PROGRESS_BAR_WIDTH = 16;
 
 type BootstrapRolloutStage = "internal" | "beta" | "default";
 type BootstrapCheckStatus = "pass" | "warn" | "fail";
@@ -95,10 +99,32 @@ type SpawnResult = {
 type OpenClawCliAvailability = {
   available: boolean;
   installed: boolean;
+  installedAt?: number;
   version?: string;
   command: string;
   globalBinDir?: string;
   shellCommandPath?: string;
+};
+
+type OutputLineHandler = (line: string, stream: "stdout" | "stderr") => void;
+
+type OpenClawCliCheckCache = {
+  checkedAt: number;
+  pathEnv: string;
+  available: boolean;
+  command: string;
+  version?: string;
+  globalBinDir?: string;
+  shellCommandPath?: string;
+  installedAt?: number;
+};
+
+type OpenClawSetupProgress = {
+  startStage: (label: string) => void;
+  output: (line: string) => void;
+  completeStage: (suffix?: string) => void;
+  finish: (message: string) => void;
+  fail: (message: string) => void;
 };
 
 type GatewayAutoFixStep = {
@@ -147,6 +173,7 @@ async function runCommandWithTimeout(
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     ioMode?: "capture" | "inherit";
+    onOutputLine?: OutputLineHandler;
   },
 ): Promise<SpawnResult> {
   const [command, ...args] = argv;
@@ -172,10 +199,28 @@ async function runCommandWithTimeout(
     }, options.timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer | string) => {
-      stdout += String(chunk);
+      const text = String(chunk);
+      stdout += text;
+      if (options.onOutputLine) {
+        for (const segment of text.split(/\r?\n/)) {
+          const line = segment.trim();
+          if (line.length > 0) {
+            options.onOutputLine(line, "stdout");
+          }
+        }
+      }
     });
     child.stderr?.on("data", (chunk: Buffer | string) => {
-      stderr += String(chunk);
+      const text = String(chunk);
+      stderr += text;
+      if (options.onOutputLine) {
+        for (const segment of text.split(/\r?\n/)) {
+          const line = segment.trim();
+          if (line.length > 0) {
+            options.onOutputLine(line, "stderr");
+          }
+        }
+      }
     });
     child.once("error", (error: Error) => {
       if (settled) {
@@ -300,12 +345,6 @@ function firstNonEmptyLine(...values: Array<string | undefined>): string | undef
   return undefined;
 }
 
-function resolveProfileStateDir(profile: string, env: NodeJS.ProcessEnv = process.env): string {
-  void profile;
-  const home = resolveRequiredHomeDir(env, os.homedir);
-  return path.join(home, DENCHCLAW_STATE_DIRNAME);
-}
-
 function resolveGatewayLaunchAgentLabel(profile: string): string {
   const normalized = profile.trim().toLowerCase();
   if (!normalized || normalized === "default") {
@@ -386,94 +425,20 @@ async function ensureToolsProfile(openclawCommand: string, profile: string): Pro
   });
 }
 
-async function probeForWebApp(port: number): Promise<boolean> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 1_500);
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/profiles`, {
-      method: "GET",
-      signal: controller.signal,
-      redirect: "manual",
-    });
-    if (response.status < 200 || response.status >= 400) {
-      return false;
-    }
-    const payload = (await response.json().catch(() => null)) as {
-      profiles?: unknown;
-      activeProfile?: unknown;
-    } | null;
-    return Boolean(
-      payload &&
-      typeof payload === "object" &&
-      Array.isArray(payload.profiles) &&
-      typeof payload.activeProfile === "string",
-    );
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function waitForWebApp(preferredPort: number): Promise<boolean> {
-  for (let attempt = 0; attempt < WEB_APP_PROBE_ATTEMPTS; attempt += 1) {
-    if (await probeForWebApp(preferredPort)) {
-      return true;
-    }
-    await sleep(WEB_APP_PROBE_DELAY_MS);
-  }
-  return false;
-}
-
-function resolveCliPackageRoot(): string {
-  let dir = path.dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 5; i++) {
-    if (existsSync(path.join(dir, "package.json"))) {
-      return dir;
-    }
-    dir = path.dirname(dir);
-  }
-  return process.cwd();
-}
-
-/**
- * Spawn the pre-built standalone Next.js server as a detached background
- * process if it isn't already running on the target port.
- */
-function startWebAppIfNeeded(port: number, stateDir: string, gatewayPort: number): void {
-  const pkgRoot = resolveCliPackageRoot();
-  const standaloneServer = path.join(pkgRoot, "apps/web/.next/standalone/apps/web/server.js");
-  if (!existsSync(standaloneServer)) {
-    return;
-  }
-
-  const logDir = path.join(stateDir, "logs");
-  mkdirSync(logDir, { recursive: true });
-  const outFd = openSync(path.join(logDir, "web-app.log"), "a");
-  const errFd = openSync(path.join(logDir, "web-app.err.log"), "a");
-
-  const child = spawn(process.execPath, [standaloneServer], {
-    cwd: path.dirname(standaloneServer),
-    detached: true,
-    stdio: ["ignore", outFd, errFd],
-    env: {
-      ...process.env,
-      PORT: String(port),
-      HOSTNAME: "127.0.0.1",
-      OPENCLAW_GATEWAY_PORT: String(gatewayPort),
-    },
-  });
-  child.unref();
-}
-
 async function runOpenClaw(
   openclawCommand: string,
   args: string[],
   timeoutMs: number,
   ioMode: "capture" | "inherit" = "capture",
   env?: NodeJS.ProcessEnv,
+  onOutputLine?: OutputLineHandler,
 ): Promise<SpawnResult> {
-  return await runCommandWithTimeout([openclawCommand, ...args], { timeoutMs, ioMode, env });
+  return await runCommandWithTimeout([openclawCommand, ...args], {
+    timeoutMs,
+    ioMode,
+    env,
+    onOutputLine,
+  });
 }
 
 async function runOpenClawOrThrow(params: {
@@ -618,11 +583,150 @@ function parseJsonPayload(raw: string | undefined): Record<string, unknown> | un
   }
 }
 
-async function detectGlobalOpenClawInstall(): Promise<{ installed: boolean; version?: string }> {
+function resolveOpenClawCliCheckCachePath(stateDir: string): string {
+  return path.join(stateDir, "cache", OPENCLAW_CLI_CHECK_CACHE_FILE);
+}
+
+function readOpenClawCliCheckCache(stateDir: string): OpenClawCliCheckCache | undefined {
+  const cachePath = resolveOpenClawCliCheckCachePath(stateDir);
+  if (!existsSync(cachePath)) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(cachePath, "utf-8")) as Partial<OpenClawCliCheckCache>;
+    if (
+      typeof parsed.checkedAt !== "number" ||
+      !Number.isFinite(parsed.checkedAt) ||
+      typeof parsed.pathEnv !== "string" ||
+      parsed.pathEnv !== (process.env.PATH ?? "") ||
+      typeof parsed.available !== "boolean" ||
+      !parsed.available ||
+      typeof parsed.command !== "string" ||
+      parsed.command.length === 0
+    ) {
+      return undefined;
+    }
+    const ageMs = Date.now() - parsed.checkedAt;
+    if (ageMs < 0 || ageMs > OPENCLAW_CLI_CHECK_CACHE_TTL_MS) {
+      return undefined;
+    }
+    const looksLikePath =
+      parsed.command.includes(path.sep) ||
+      parsed.command.includes("/") ||
+      parsed.command.includes("\\");
+    if (looksLikePath && !existsSync(parsed.command)) {
+      return undefined;
+    }
+    return {
+      checkedAt: parsed.checkedAt,
+      pathEnv: parsed.pathEnv,
+      available: parsed.available,
+      command: parsed.command,
+      version: typeof parsed.version === "string" ? parsed.version : undefined,
+      globalBinDir: typeof parsed.globalBinDir === "string" ? parsed.globalBinDir : undefined,
+      shellCommandPath:
+        typeof parsed.shellCommandPath === "string" ? parsed.shellCommandPath : undefined,
+      installedAt: typeof parsed.installedAt === "number" ? parsed.installedAt : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function writeOpenClawCliCheckCache(
+  stateDir: string,
+  cache: Omit<OpenClawCliCheckCache, "checkedAt" | "pathEnv">,
+): void {
+  try {
+    const cachePath = resolveOpenClawCliCheckCachePath(stateDir);
+    mkdirSync(path.dirname(cachePath), { recursive: true });
+    const payload: OpenClawCliCheckCache = {
+      ...cache,
+      checkedAt: Date.now(),
+      pathEnv: process.env.PATH ?? "",
+    };
+    writeFileSync(cachePath, JSON.stringify(payload, null, 2), "utf-8");
+  } catch {
+    // Cache write failures should never block bootstrap.
+  }
+}
+
+function createOpenClawSetupProgress(params: {
+  enabled: boolean;
+  totalStages: number;
+}): OpenClawSetupProgress {
+  if (!params.enabled || params.totalStages <= 0 || !process.stdout.isTTY) {
+    const noop = () => undefined;
+    return {
+      startStage: noop,
+      output: noop,
+      completeStage: noop,
+      finish: noop,
+      fail: noop,
+    };
+  }
+
+  const s = spinner();
+  let completedStages = 0;
+  let activeLabel = "";
+
+  const renderBar = () => {
+    const ratio = completedStages / params.totalStages;
+    const filled = Math.max(
+      0,
+      Math.min(
+        OPENCLAW_SETUP_PROGRESS_BAR_WIDTH,
+        Math.round(ratio * OPENCLAW_SETUP_PROGRESS_BAR_WIDTH),
+      ),
+    );
+    const bar = `${"#".repeat(filled)}${"-".repeat(OPENCLAW_SETUP_PROGRESS_BAR_WIDTH - filled)}`;
+    return `[${bar}] ${completedStages}/${params.totalStages}`;
+  };
+
+  const truncate = (value: string, max = 84) =>
+    value.length > max ? `${value.slice(0, max - 3)}...` : value;
+
+  const renderStageLine = (detail?: string) => {
+    const base = `${renderBar()} ${activeLabel}`.trim();
+    if (!detail) {
+      return base;
+    }
+    return truncate(`${base} -> ${detail}`);
+  };
+
+  return {
+    startStage: (label: string) => {
+      activeLabel = label;
+      s.start(renderStageLine());
+    },
+    output: (line: string) => {
+      if (!line) {
+        return;
+      }
+      s.message(renderStageLine(line));
+    },
+    completeStage: (suffix?: string) => {
+      completedStages = Math.min(params.totalStages, completedStages + 1);
+      s.stop(renderStageLine(suffix ?? "done"));
+    },
+    finish: (message: string) => {
+      completedStages = params.totalStages;
+      s.stop(`${renderBar()} ${truncate(message)}`.trim());
+    },
+    fail: (message: string) => {
+      s.stop(`${renderBar()} ${truncate(message)}`.trim());
+    },
+  };
+}
+
+async function detectGlobalOpenClawInstall(
+  onOutputLine?: OutputLineHandler,
+): Promise<{ installed: boolean; version?: string }> {
   const result = await runCommandWithTimeout(
     ["npm", "ls", "-g", "openclaw", "--depth=0", "--json", "--silent"],
     {
       timeoutMs: 15_000,
+      onOutputLine,
     },
   ).catch(() => null);
 
@@ -637,9 +741,12 @@ async function detectGlobalOpenClawInstall(): Promise<{ installed: boolean; vers
   return { installed: false };
 }
 
-async function resolveNpmGlobalBinDir(): Promise<string | undefined> {
+async function resolveNpmGlobalBinDir(
+  onOutputLine?: OutputLineHandler,
+): Promise<string | undefined> {
   const result = await runCommandWithTimeout(["npm", "prefix", "-g"], {
     timeoutMs: 8_000,
+    onOutputLine,
   }).catch(() => null);
   if (!result || result.code !== 0) {
     return undefined;
@@ -662,10 +769,13 @@ function resolveGlobalOpenClawCommand(globalBinDir: string | undefined): string 
   return candidates.find((candidate) => existsSync(candidate));
 }
 
-async function resolveShellOpenClawPath(): Promise<string | undefined> {
+async function resolveShellOpenClawPath(
+  onOutputLine?: OutputLineHandler,
+): Promise<string | undefined> {
   const locator = process.platform === "win32" ? "where" : "which";
   const result = await runCommandWithTimeout([locator, "openclaw"], {
     timeoutMs: 4_000,
+    onOutputLine,
   }).catch(() => null);
   if (!result || result.code !== 0) {
     return undefined;
@@ -681,14 +791,55 @@ function isProjectLocalOpenClawPath(commandPath: string | undefined): boolean {
   return normalized.includes("/node_modules/.bin/openclaw");
 }
 
-async function ensureOpenClawCliAvailable(): Promise<OpenClawCliAvailability> {
-  const globalBefore = await detectGlobalOpenClawInstall();
+async function ensureOpenClawCliAvailable(params: {
+  stateDir: string;
+  showProgress: boolean;
+}): Promise<OpenClawCliAvailability> {
+  const cached = readOpenClawCliCheckCache(params.stateDir);
+  if (cached) {
+    const ageSeconds = Math.max(0, Math.floor((Date.now() - cached.checkedAt) / 1000));
+    const progress = createOpenClawSetupProgress({
+      enabled: params.showProgress,
+      totalStages: 1,
+    });
+    progress.startStage("Reusing cached OpenClaw install check");
+    progress.completeStage(`cache hit (${ageSeconds}s old)`);
+    return {
+      available: true,
+      installed: false,
+      installedAt: cached.installedAt,
+      version: cached.version,
+      command: cached.command,
+      globalBinDir: cached.globalBinDir,
+      shellCommandPath: cached.shellCommandPath,
+    };
+  }
+
+  const progress = createOpenClawSetupProgress({
+    enabled: params.showProgress,
+    totalStages: 5,
+  });
+  progress.startStage("Checking global OpenClaw install");
+
+  const globalBefore = await detectGlobalOpenClawInstall((line) => {
+    progress.output(`npm ls: ${line}`);
+  });
+  progress.completeStage(
+    globalBefore.installed ? `found ${globalBefore.version ?? "installed"}` : "missing",
+  );
+
   let installed = false;
+  let installedAt: number | undefined;
+  progress.startStage("Ensuring openclaw@latest is installed globally");
   if (!globalBefore.installed) {
     const install = await runCommandWithTimeout(["npm", "install", "-g", "openclaw@latest"], {
       timeoutMs: 10 * 60_000,
+      onOutputLine: (line) => {
+        progress.output(`npm install: ${line}`);
+      },
     }).catch(() => null);
     if (!install || install.code !== 0) {
+      progress.fail("OpenClaw global install failed.");
       return {
         available: false,
         installed: false,
@@ -697,19 +848,55 @@ async function ensureOpenClawCliAvailable(): Promise<OpenClawCliAvailability> {
       };
     }
     installed = true;
+    installedAt = Date.now();
+    progress.completeStage("installed openclaw@latest");
+  } else {
+    progress.completeStage("already installed; skipping install");
   }
 
-  const globalAfter = installed ? await detectGlobalOpenClawInstall() : globalBefore;
-  const globalBinDir = await resolveNpmGlobalBinDir();
+  progress.startStage("Resolving global and shell OpenClaw paths");
+  const [globalBinDir, shellCommandPath] = await Promise.all([
+    resolveNpmGlobalBinDir((line) => {
+      progress.output(`npm prefix: ${line}`);
+    }),
+    resolveShellOpenClawPath((line) => {
+      progress.output(`${process.platform === "win32" ? "where" : "which"}: ${line}`);
+    }),
+  ]);
+  progress.completeStage("path discovery complete");
+
+  const globalAfter = installed ? { installed: true, version: globalBefore.version } : globalBefore;
   const globalCommand = resolveGlobalOpenClawCommand(globalBinDir);
   const command = globalCommand ?? "openclaw";
-  const check = await runOpenClaw(command, ["--version"], 4_000).catch(() => null);
-  const shellCommandPath = await resolveShellOpenClawPath();
+  progress.startStage("Verifying OpenClaw CLI responsiveness");
+  const check = await runOpenClaw(command, ["--version"], 4_000, "capture", undefined, (line) => {
+    progress.output(`openclaw --version: ${line}`);
+  }).catch(() => null);
+  progress.completeStage(
+    check?.code === 0 ? "OpenClaw responded" : "OpenClaw version probe failed",
+  );
+
   const version = normalizeVersionOutput(check?.stdout || check?.stderr || globalAfter.version);
   const available = Boolean(globalAfter.installed && check && check.code === 0);
+  progress.startStage("Caching OpenClaw check result");
+  if (available) {
+    writeOpenClawCliCheckCache(params.stateDir, {
+      available,
+      command,
+      version,
+      globalBinDir,
+      shellCommandPath,
+      installedAt,
+    });
+    progress.completeStage(`saved (${Math.floor(OPENCLAW_CLI_CHECK_CACHE_TTL_MS / 60_000)}m TTL)`);
+  } else {
+    progress.fail("OpenClaw CLI check failed (cache not written).");
+  }
+
   return {
     available,
     installed,
+    installedAt,
     version,
     command,
     globalBinDir,
@@ -937,7 +1124,11 @@ function remediationForGatewayFailure(
 }
 
 function remediationForWebUiFailure(port: number): string {
-  return `Web UI did not respond on ${port}. Ensure the apps/web directory exists and rerun with \`denchclaw bootstrap --web-port <port>\` if needed.`;
+  return [
+    `Web UI did not respond on ${port}.`,
+    `Run \`dench update --web-port ${port}\` to refresh the managed web runtime.`,
+    `If the port is stuck, run \`dench stop --web-port ${port}\` first.`,
+  ].join(" ");
 }
 
 function describeWorkspaceSeedResult(result: WorkspaceSeedResult): string {
@@ -1234,6 +1425,7 @@ function logBootstrapChecklist(diagnostics: BootstrapDiagnostics, runtime: Runti
 async function shouldRunUpdate(params: {
   opts: BootstrapOptions;
   runtime: RuntimeEnv;
+  installResult: OpenClawCliAvailability;
 }): Promise<boolean> {
   if (params.opts.updateNow) {
     return true;
@@ -1244,6 +1436,17 @@ async function shouldRunUpdate(params: {
     params.opts.json ||
     !process.stdin.isTTY
   ) {
+    return false;
+  }
+  const installedRecently =
+    params.installResult.installed ||
+    (typeof params.installResult.installedAt === "number" &&
+      Date.now() - params.installResult.installedAt <=
+        OPENCLAW_UPDATE_PROMPT_SUPPRESS_AFTER_INSTALL_MS);
+  if (installedRecently) {
+    params.runtime.log(
+      theme.muted("Skipping update prompt because OpenClaw was installed moments ago."),
+    );
     return false;
   }
   const decision = await confirm({
@@ -1266,11 +1469,16 @@ export async function bootstrapCommand(
   const legacyFallbackEnabled = isLegacyFallbackEnabled();
   const appliedProfile = applyCliProfileEnv({ profile: opts.profile });
   const profile = appliedProfile.effectiveProfile;
+  const stateDir = resolveProfileStateDir(profile);
+  const workspaceDir = resolveBootstrapWorkspaceDir(stateDir);
   if (appliedProfile.warning && !opts.json) {
     runtime.log(theme.warn(appliedProfile.warning));
   }
 
-  const installResult = await ensureOpenClawCliAvailable();
+  const installResult = await ensureOpenClawCliAvailable({
+    stateDir,
+    showProgress: !opts.json,
+  });
   if (!installResult.available) {
     throw new Error(
       [
@@ -1286,7 +1494,7 @@ export async function bootstrapCommand(
   }
   const openclawCommand = installResult.command;
 
-  if (await shouldRunUpdate({ opts, runtime })) {
+  if (await shouldRunUpdate({ opts, runtime, installResult })) {
     await runOpenClawWithProgress({
       openclawCommand,
       args: ["update", "--yes"],
@@ -1321,9 +1529,6 @@ export async function bootstrapCommand(
     gatewayPort = availablePort;
     portAutoAssigned = true;
   }
-
-  const stateDir = resolveProfileStateDir(profile);
-  const workspaceDir = resolveBootstrapWorkspaceDir(stateDir);
 
   if (portAutoAssigned && !opts.json) {
     runtime.log(
@@ -1372,9 +1577,10 @@ export async function bootstrapCommand(
     });
   }
 
+  const packageRoot = resolveCliPackageRoot();
   const workspaceSeed = seedWorkspaceFromAssets({
     workspaceDir,
-    packageRoot: resolveCliPackageRoot(),
+    packageRoot,
   });
 
   // Ensure gateway.mode=local so the gateway never drifts to remote mode.
@@ -1410,12 +1616,14 @@ export async function bootstrapCommand(
   }
   const gatewayUrl = `ws://127.0.0.1:${gatewayPort}`;
   const preferredWebPort = parseOptionalPort(opts.webPort) ?? DEFAULT_WEB_APP_PORT;
-
-  if (!(await probeForWebApp(preferredWebPort))) {
-    startWebAppIfNeeded(preferredWebPort, stateDir, gatewayPort);
-  }
-
-  const webReachable = await waitForWebApp(preferredWebPort);
+  const webRuntimeStatus = await ensureManagedWebRuntime({
+    stateDir,
+    packageRoot,
+    denchVersion: VERSION,
+    port: preferredWebPort,
+    gatewayPort,
+  });
+  const webReachable = webRuntimeStatus.ready;
   const webUrl = `http://localhost:${preferredWebPort}`;
   const diagnostics = buildBootstrapDiagnostics({
     profile,
@@ -1435,6 +1643,9 @@ export async function bootstrapCommand(
   const opened = shouldOpen ? await openUrl(webUrl) : false;
 
   if (!opts.json) {
+    if (!webRuntimeStatus.ready) {
+      runtime.log(theme.warn(`Managed web runtime check failed: ${webRuntimeStatus.reason}`));
+    }
     if (installResult.installed) {
       runtime.log(theme.muted("Installed global OpenClaw CLI via npm."));
     }
