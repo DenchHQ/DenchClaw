@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { TraceContextManager } from "../../extensions/posthog-analytics/lib/trace-context.js";
-import { emitGeneration, emitToolSpan, emitTrace, emitCustomEvent, extractToolNamesFromMessages, extractUsageFromMessages, normalizeOutputForPostHog, buildTraceState } from "../../extensions/posthog-analytics/lib/event-mappers.js";
+import { emitGeneration, emitToolSpan, emitTrace, emitCustomEvent, extractToolNamesFromMessages, extractUsageFromMessages, normalizeOutputForPostHog, buildTraceState, extractInputMessages } from "../../extensions/posthog-analytics/lib/event-mappers.js";
 
 function createMockPostHog() {
   return {
@@ -128,6 +128,32 @@ describe("normalizeOutputForPostHog", () => {
       { role: "tool", name: "exec", content: "result" },
     ];
     expect(normalizeOutputForPostHog(messages)).toBeUndefined();
+  });
+});
+
+describe("extractInputMessages", () => {
+  it("extracts non-assistant messages from a conversation", () => {
+    const messages = [
+      { role: "system", content: "You are helpful" },
+      { role: "user", content: "What is 2+2?" },
+      { role: "assistant", content: "4" },
+      { role: "tool", name: "calc", content: "4" },
+    ];
+    const result = extractInputMessages(messages);
+    expect(result).toEqual([
+      { role: "system", content: "You are helpful" },
+      { role: "user", content: "What is 2+2?" },
+      { role: "tool", name: "calc", content: "4" },
+    ]);
+  });
+
+  it("returns undefined for non-array input", () => {
+    expect(extractInputMessages(null)).toBeUndefined();
+    expect(extractInputMessages(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined when only assistant messages exist", () => {
+    expect(extractInputMessages([{ role: "assistant", content: "hi" }])).toBeUndefined();
   });
 });
 
@@ -285,6 +311,45 @@ describe("emitGeneration", () => {
     traceCtx.startTrace("s", "r");
     emitGeneration(ph, traceCtx, "s", { durationMs: 5000 }, true);
     expect(ph.capture.mock.calls[0][0].properties.$ai_latency).toBe(5);
+  });
+
+  it("includes user messages from event.messages in $ai_input even when trace.input is empty", () => {
+    traceCtx.startTrace("s", "r");
+
+    const messages = [
+      { role: "user", content: "what is this" },
+      { role: "assistant", content: "It's a config file." },
+    ];
+    emitGeneration(ph, traceCtx, "s", { messages }, false);
+
+    const input = ph.capture.mock.calls[0][0].properties.$ai_input;
+    expect(input).toEqual([{ role: "user", content: "what is this" }]);
+  });
+
+  it("prefers event.messages over trace.input for $ai_input", () => {
+    traceCtx.startTrace("s", "r");
+    traceCtx.setInput("s", [{ role: "system", content: "tool config" }], false);
+
+    const messages = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" },
+    ];
+    emitGeneration(ph, traceCtx, "s", { messages }, false);
+
+    const input = ph.capture.mock.calls[0][0].properties.$ai_input;
+    expect(input).toEqual([{ role: "user", content: "hello" }]);
+  });
+
+  it("falls back to trace.input when event.messages has no input messages", () => {
+    traceCtx.startTrace("s", "r");
+    traceCtx.setInput("s", [{ role: "user", content: "from trace" }], false);
+
+    emitGeneration(ph, traceCtx, "s", {
+      output: [{ role: "assistant", content: "reply" }],
+    }, false);
+
+    const input = ph.capture.mock.calls[0][0].properties.$ai_input;
+    expect(input).toEqual([{ role: "user", content: "from trace" }]);
   });
 });
 

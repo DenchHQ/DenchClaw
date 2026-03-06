@@ -27,7 +27,7 @@ export class TraceContextManager {
 
   startTrace(sessionKey: string, runId: string): void {
     this.traces.set(sessionKey, {
-      traceId: randomUUID(),
+      traceId: sessionKey,
       sessionId: sessionKey,
       runId,
       startedAt: Date.now(),

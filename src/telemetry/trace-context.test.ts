@@ -28,12 +28,13 @@ describe("TraceContextManager", () => {
 
   // ── Trace lifecycle (session-keyed) ──
 
-  it("generates a unique UUID traceId for each trace (ensures PostHog trace grouping)", () => {
+  it("uses sessionKey as traceId so feedback and generation events share the same trace", () => {
     ctx.startTrace("session-1", "run-1");
     ctx.startTrace("session-2", "run-2");
     const t1 = ctx.getTrace("session-1")!;
     const t2 = ctx.getTrace("session-2")!;
-    expect(t1.traceId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(t1.traceId).toBe("session-1");
+    expect(t2.traceId).toBe("session-2");
     expect(t1.traceId).not.toBe(t2.traceId);
   });
 
