@@ -1,0 +1,2 @@
+{"sessionId":"104a00","location":"terminal-server.ts:pty.onExit","message":"pty exited","data":{"exitCode":1,"signal":0},"timestamp":1773031825675}
+{"sessionId":"104a00","location":"terminal-drawer.tsx:ws.onclose","message":"WS closed","data":{"disposed":true,"code":1005,"reason":""},"timestamp":1773031825669,"hypothesisId":"H1"}

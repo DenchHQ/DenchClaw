@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import type { DenchAppManifest } from "../../workspace/workspace-content";
+import type { DenchAppManifest } from "@/lib/workspace-shell-types";
 
 /** Build a path-based URL for serving files from a .dench.app folder. */
 export function appServeUrl(appPath: string, filePath: string): string {

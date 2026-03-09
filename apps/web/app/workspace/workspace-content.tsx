@@ -55,6 +55,16 @@ import {
   activateTab, reorderTabs, togglePinTab,
   inferTabType, inferTabTitle,
 } from "@/lib/tab-state";
+import type {
+  WorkspaceInitialSnapshot,
+  WorkspaceContext as SharedWorkspaceContext,
+  WorkspaceObjectData as SharedObjectData,
+  WorkspaceFileData as SharedFileData,
+  WorkspaceContentState as SharedContentState,
+  DenchAppManifest,
+  SidebarPreviewContent as SharedSidebarPreviewContent,
+  ChatSidebarPreviewState as SharedChatSidebarPreviewState,
+} from "@/lib/workspace-shell-types";
 import dynamic from "next/dynamic";
 
 const TerminalDrawer = dynamic(
@@ -64,11 +74,7 @@ const TerminalDrawer = dynamic(
 
 // --- Types ---
 
-type WorkspaceContext = {
-  exists: boolean;
-  organization?: { id?: string; name?: string; slug?: string };
-  members?: Array<{ id: string; name: string; email: string; role: string }>;
-};
+type WorkspaceContext = SharedWorkspaceContext;
 
 type ReverseRelation = {
   fieldName: string;
@@ -78,95 +84,11 @@ type ReverseRelation = {
   entries: Record<string, Array<{ id: string; label: string }>>;
 };
 
-type ObjectData = {
-  object: {
-    id: string;
-    name: string;
-    description?: string;
-    icon?: string;
-    default_view?: string;
-    display_field?: string;
-  };
-  fields: Array<{
-    id: string;
-    name: string;
-    type: string;
-    enum_values?: string[];
-    enum_colors?: string[];
-    enum_multiple?: boolean;
-    related_object_id?: string;
-    relationship_type?: string;
-    related_object_name?: string;
-    sort_order?: number;
-  }>;
-  statuses: Array<{
-    id: string;
-    name: string;
-    color?: string;
-    sort_order?: number;
-  }>;
-  entries: Record<string, unknown>[];
-  relationLabels?: Record<string, Record<string, string>>;
-  reverseRelations?: ReverseRelation[];
-  effectiveDisplayField?: string;
-  savedViews?: import("@/lib/object-filters").SavedView[];
-  activeView?: string;
-  viewSettings?: import("@/lib/object-filters").ViewTypeSettings;
-  totalCount?: number;
-  page?: number;
-  pageSize?: number;
-};
-
-type FileData = {
-  content: string;
-  type: "markdown" | "yaml" | "code" | "text";
-};
-
-type ContentState =
-  | { kind: "none" }
-  | { kind: "loading" }
-  | { kind: "object"; data: ObjectData }
-  | { kind: "document"; data: FileData; title: string }
-  | { kind: "file"; data: FileData; filename: string }
-  | { kind: "code"; data: FileData; filename: string; filePath: string }
-  | { kind: "media"; url: string; mediaType: MediaType; filename: string; filePath: string }
-  | { kind: "spreadsheet"; url: string; filename: string; filePath: string }
-  | { kind: "html"; rawUrl: string; contentUrl: string; filename: string }
-  | { kind: "database"; dbPath: string; filename: string }
-  | { kind: "report"; reportPath: string; filename: string }
-  | { kind: "directory"; node: TreeNode }
-  | { kind: "cron-dashboard" }
-  | { kind: "cron-job"; jobId: string; job: CronJob }
-  | { kind: "cron-session"; jobId: string; job: CronJob; sessionId: string; run: import("../types/cron").CronRunLogEntry }
-  | { kind: "duckdb-missing" }
-  | { kind: "richDocument"; html: string; filePath: string; mode: "docx" | "txt" }
-  | { kind: "app"; appPath: string; manifest: DenchAppManifest; filename: string };
-
-export type DenchAppManifest = {
-  name: string;
-  description?: string;
-  icon?: string;
-  version?: string;
-  author?: string;
-  entry?: string;
-  runtime?: "static" | "esbuild" | "build";
-  permissions?: string[];
-};
-
-type SidebarPreviewContent =
-  | { kind: "document"; data: FileData; title: string }
-  | { kind: "file"; data: FileData; filename: string }
-  | { kind: "code"; data: FileData; filename: string; filePath: string }
-  | { kind: "media"; url: string; mediaType: MediaType; filename: string; filePath: string }
-  | { kind: "spreadsheet"; url: string; filename: string; filePath: string }
-  | { kind: "database"; dbPath: string; filename: string }
-  | { kind: "directory"; path: string; name: string }
-  | { kind: "richDocument"; html: string; filePath: string; mode: "docx" | "txt" };
-
-type ChatSidebarPreviewState =
-  | { status: "loading"; path: string; filename: string }
-  | { status: "error"; path: string; filename: string; message: string }
-  | { status: "ready"; path: string; filename: string; content: SidebarPreviewContent };
+type ObjectData = SharedObjectData;
+type FileData = SharedFileData;
+type ContentState = SharedContentState;
+type SidebarPreviewContent = SharedSidebarPreviewContent;
+type ChatSidebarPreviewState = SharedChatSidebarPreviewState;
 
 type WebSession = {
   id: string;
@@ -377,27 +299,27 @@ function resolveNode(
 
 // --- Main Page ---
 
-export function WorkspaceShell() {
+export function WorkspaceShell({ initialSnapshot }: { initialSnapshot?: WorkspaceInitialSnapshot }) {
   return (
     <Suspense fallback={
       <div className="flex h-screen items-center justify-center" style={{ background: "var(--color-bg)" }}>
         <UnicodeSpinner name="braille" className="text-2xl" style={{ color: "var(--color-text-muted)" }} />
       </div>
     }>
-      <WorkspacePageInner />
+      <WorkspacePageInner initialSnapshot={initialSnapshot} />
     </Suspense>
   );
 }
 
 
-function WorkspacePageInner() {
+function WorkspacePageInner({ initialSnapshot }: { initialSnapshot?: WorkspaceInitialSnapshot }) {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const initialPathHandled = useRef(false);
+  const initialPathHandled = useRef(Boolean(initialSnapshot));
   // Counts how many renders have happened since hydration completed.
   // The URL sync effect skips render 0 (the same render where hydration ran)
   // because React state (activePath, etc.) hasn't updated yet.
-  const rendersSinceHydration = useRef(-1);
+  const rendersSinceHydration = useRef(initialSnapshot ? 1 : -1);
   const lastPushedQs = useRef<string | null>(null);
 
   // Chat panel ref for session management
@@ -414,21 +336,32 @@ function WorkspacePageInner() {
     browseDir, setBrowseDir, parentDir: browseParentDir, workspaceRoot, openclawDir,
     activeWorkspace: workspaceName,
     showHidden, setShowHidden,
-  } = useWorkspaceWatcher();
+  } = useWorkspaceWatcher(initialSnapshot ? {
+    initialTree: initialSnapshot.tree as TreeNode[],
+    initialLoading: false,
+    initialExists: initialSnapshot.exists,
+    initialBrowseDir: initialSnapshot.browseDir,
+    initialParentDir: initialSnapshot.parentDir,
+    initialWorkspaceRoot: initialSnapshot.workspaceRoot,
+    initialOpenclawDir: initialSnapshot.openclawDir,
+    initialActiveWorkspace: initialSnapshot.activeWorkspace,
+    initialShowHidden: initialSnapshot.showHidden,
+    skipInitialFetch: true,
+  } : undefined);
 
   // Search index for @ mention fuzzy search (files + entries)
   const { search: searchIndex } = useSearchIndex();
 
-  const [context, setContext] = useState<WorkspaceContext | null>(null);
-  const [activePath, setActivePath] = useState<string | null>(null);
-  const [content, setContent] = useState<ContentState>({ kind: "none" });
+  const [context, setContext] = useState<WorkspaceContext | null>(initialSnapshot?.context ?? null);
+  const [activePath, setActivePath] = useState<string | null>(initialSnapshot?.activePath ?? null);
+  const [content, setContent] = useState<ContentState>(initialSnapshot?.content ?? { kind: "none" });
   const [showChatSidebar, setShowChatSidebar] = useState(true);
-  const [chatSidebarPreview, setChatSidebarPreview] = useState<ChatSidebarPreviewState | null>(null);
+  const [chatSidebarPreview, setChatSidebarPreview] = useState<ChatSidebarPreviewState | null>(initialSnapshot?.chatSidebarPreview ?? null);
 
   // Chat session state
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(initialSnapshot?.activeSessionId ?? null);
   // File-scoped chat session (compact panel in right sidebar when a file is open)
-  const [fileChatSessionId, setFileChatSessionId] = useState<string | null>(null);
+  const [fileChatSessionId, setFileChatSessionId] = useState<string | null>(initialSnapshot?.fileChatSessionId ?? null);
   const [sessions, setSessions] = useState<WebSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
@@ -436,7 +369,7 @@ function WorkspacePageInner() {
 
   // Subagent tracking
   const [subagents, setSubagents] = useState<SubagentSpawnInfo[]>([]);
-  const [activeSubagentKey, setActiveSubagentKey] = useState<string | null>(null);
+  const [activeSubagentKey, setActiveSubagentKey] = useState<string | null>(initialSnapshot?.activeSubagentKey ?? null);
 
   const handleSubagentSpawned = useCallback((info: SubagentSpawnInfo) => {
     setSubagents((prev) => {
@@ -494,7 +427,7 @@ function WorkspacePageInner() {
   const [entryModal, setEntryModal] = useState<{
     objectName: string;
     entryId: string;
-  } | null>(null);
+  } | null>(initialSnapshot?.entryModal ?? null);
 
   // Mobile responsive state
   const isMobile = useIsMobile();
@@ -506,10 +439,10 @@ function WorkspacePageInner() {
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false);
 
   // Terminal drawer state
-  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(initialSnapshot?.terminalOpen ?? false);
 
   // Tab state -- always starts with the home tab
-  const [tabState, setTabState] = useState<TabState>({ tabs: [HOME_TAB], activeTabId: HOME_TAB_ID });
+  const [tabState, setTabState] = useState<TabState>(initialSnapshot?.initialTabState ?? { tabs: [HOME_TAB], activeTabId: HOME_TAB_ID });
   // Track which workspace we loaded tabs for, so we reload if the workspace switches
   // and don't save until we've loaded first.
   const tabLoadedForWorkspace = useRef<string | null>(null);
@@ -519,9 +452,18 @@ function WorkspacePageInner() {
     const key = workspaceName || null;
     if (tabLoadedForWorkspace.current === key) return;
     tabLoadedForWorkspace.current = key;
-    const loaded = loadTabs(key);
+    let loaded = loadTabs(key);
+    if (initialSnapshot?.activeTab && initialSnapshot.activeTab.id !== HOME_TAB_ID) {
+      loaded = openTab(loaded, initialSnapshot.activeTab);
+      const mergedRouteTab = loaded.tabs.find((tab) => tab.path === initialSnapshot.activeTab?.path);
+      if (mergedRouteTab) {
+        loaded = activateTab(loaded, mergedRouteTab.id);
+      }
+    } else if (initialSnapshot?.activeTab?.id === HOME_TAB_ID) {
+      loaded = activateTab(loaded, HOME_TAB_ID);
+    }
     setTabState(loaded);
-  }, [workspaceName]);
+  }, [workspaceName, initialSnapshot]);
 
   // Persist tabs to localStorage on change (only after initial load for this workspace)
   useEffect(() => {
@@ -862,7 +804,7 @@ function WorkspacePageInner() {
           }
           setContent({ kind: "app", appPath: node.path, manifest, filename: node.name });
         } else if (node.type === "folder") {
-          setContent({ kind: "directory", node });
+          setContent({ kind: "directory", node: node as unknown as import("@/lib/workspace-shell-types").WorkspaceTreeNode });
         }
       } catch {
         setContent({ kind: "none" });
@@ -870,6 +812,14 @@ function WorkspacePageInner() {
     },
     [],
   );
+
+  // If the server bootstrap could not fully resolve the initial content,
+  // finish it on the client without showing the home view first.
+  useEffect(() => {
+    if (!initialSnapshot?.deferredNode) {return;}
+    if (content.kind !== "loading") {return;}
+    void loadContent(initialSnapshot.deferredNode as TreeNode);
+  }, [initialSnapshot, content.kind, loadContent]);
 
   const handleNodeSelect = useCallback(
     (node: TreeNode) => {
