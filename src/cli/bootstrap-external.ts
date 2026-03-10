@@ -1709,6 +1709,15 @@ export async function bootstrapCommand(
     posthogKey: process.env.POSTHOG_KEY || "",
   });
 
+  // Ensure gateway.mode=local BEFORE onboard so the daemon starts successfully.
+  // Previously this ran post-onboard, but onboard --install-daemon starts the
+  // gateway immediately — if gateway.mode is unset at that point the daemon
+  // blocks with "set gateway.mode=local" and enters a crash loop.
+  await ensureGatewayModeLocal(openclawCommand, profile);
+  // Persist the assigned port so the daemon binds to the correct port on first
+  // start rather than falling back to the default.
+  await ensureGatewayPort(openclawCommand, profile, gatewayPort);
+
   const onboardArgv = [
     "--profile",
     profile,
@@ -1752,13 +1761,8 @@ export async function bootstrapCommand(
   const postOnboardSpinner = !opts.json ? spinner() : null;
   postOnboardSpinner?.start("Finalizing configuration…");
 
-  // Ensure gateway.mode=local so the gateway never drifts to remote mode.
-  // Keep this post-onboard so we normalize any wizard defaults.
-  await ensureGatewayModeLocal(openclawCommand, profile);
-  postOnboardSpinner?.message("Configuring gateway port…");
-  // Persist the assigned port so all runtime clients (including web) resolve
-  // the same gateway target on subsequent requests.
-  await ensureGatewayPort(openclawCommand, profile, gatewayPort);
+  // gateway.mode and gateway.port are now set pre-onboard (before
+  // --install-daemon) so the daemon can start without blocking.  See above.
   postOnboardSpinner?.message("Setting tools profile…");
   // DenchClaw requires the full tool profile; onboarding defaults can drift to
   // messaging-only, so enforce this on every bootstrap run.
