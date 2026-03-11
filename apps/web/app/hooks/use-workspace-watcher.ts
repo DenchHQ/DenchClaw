@@ -20,22 +20,36 @@ export type TreeNode = {
  * Supports a browse mode: when `browseDir` is set, the tree is fetched from
  * the browse API instead of the workspace tree API.
  */
-export function useWorkspaceWatcher() {
-  const [tree, setTree] = useState<TreeNode[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [exists, setExists] = useState(false);
+type UseWorkspaceWatcherOptions = {
+  initialTree?: TreeNode[];
+  initialLoading?: boolean;
+  initialExists?: boolean;
+  initialBrowseDir?: string | null;
+  initialParentDir?: string | null;
+  initialWorkspaceRoot?: string | null;
+  initialOpenclawDir?: string | null;
+  initialActiveWorkspace?: string | null;
+  initialShowHidden?: boolean;
+  skipInitialFetch?: boolean;
+};
+
+export function useWorkspaceWatcher(options: UseWorkspaceWatcherOptions = {}) {
+  const [tree, setTree] = useState<TreeNode[]>(options.initialTree ?? []);
+  const [loading, setLoading] = useState(options.initialLoading ?? true);
+  const [exists, setExists] = useState(options.initialExists ?? false);
 
   // Browse mode state
-  const [browseDirRaw, setBrowseDirRaw] = useState<string | null>(null);
-  const [parentDir, setParentDir] = useState<string | null>(null);
-  const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
-  const [openclawDir, setOpenclawDir] = useState<string | null>(null);
-  const [activeWorkspace, setActiveWorkspace] = useState<string | null>(null);
+  const [browseDirRaw, setBrowseDirRaw] = useState<string | null>(options.initialBrowseDir ?? null);
+  const [parentDir, setParentDir] = useState<string | null>(options.initialParentDir ?? null);
+  const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(options.initialWorkspaceRoot ?? null);
+  const [openclawDir, setOpenclawDir] = useState<string | null>(options.initialOpenclawDir ?? null);
+  const [activeWorkspace, setActiveWorkspace] = useState<string | null>(options.initialActiveWorkspace ?? null);
 
   // Show hidden (dot) files/folders
-  const [showHidden, setShowHidden] = useState(false);
+  const [showHidden, setShowHidden] = useState(options.initialShowHidden ?? false);
 
   const mountedRef = useRef(true);
+  const skipFirstFetchRef = useRef(options.skipInitialFetch ?? false);
   const retryDelayRef = useRef(1000);
   // Version counter: prevents stale fetch responses from overwriting newer data.
   // Each fetch increments the counter; only the latest version's response is applied.
@@ -86,7 +100,7 @@ export function useWorkspaceWatcher() {
   // Smart setBrowseDir: auto-return to workspace mode when navigating to the
   // workspace root, so all virtual folders (Chats, Cron, etc.) and DuckDB
   // object detection are restored.
-  const browseDirRef = useRef<string | null>(null);
+  const browseDirRef = useRef<string | null>(options.initialBrowseDir ?? null);
   const setBrowseDir = useCallback((dir: string | null) => {
     let nextDir = dir;
     if (dir != null && workspaceRoot && dir === workspaceRoot) {
@@ -128,6 +142,12 @@ export function useWorkspaceWatcher() {
   // Re-fetch when browseDir changes
   useEffect(() => {
     mountedRef.current = true;
+    if (skipFirstFetchRef.current) {
+      skipFirstFetchRef.current = false;
+      return () => {
+        mountedRef.current = false;
+      };
+    }
     void fetchTree();
     return () => {
       mountedRef.current = false;

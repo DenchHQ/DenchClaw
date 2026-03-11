@@ -1,24 +1,24 @@
-"use client";
-
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { UnicodeSpinner } from "../components/unicode-spinner";
+import { redirect } from "next/navigation";
 
 /**
  * Legacy /workspace route: redirect to root preserving query params.
  */
-export default function WorkspaceRedirectPage() {
-  const router = useRouter();
+type PageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>> | Record<string, string | string[] | undefined>;
+};
 
-  useEffect(() => {
-    const qs = window.location.search;
-    const hash = window.location.hash;
-    router.replace(`/${qs}${hash}`);
-  }, [router]);
+export default async function WorkspaceRedirectPage({ searchParams }: PageProps) {
+  const params = new URLSearchParams();
+  const resolved = await searchParams;
+  for (const [key, value] of Object.entries(resolved)) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        params.append(key, item);
+      }
+    } else if (typeof value === "string") {
+      params.set(key, value);
+    }
+  }
 
-  return (
-    <div className="flex h-screen items-center justify-center" style={{ background: "var(--color-bg)" }}>
-      <UnicodeSpinner name="braille" className="text-2xl" style={{ color: "var(--color-text-muted)" }} />
-    </div>
-  );
+  redirect(params.toString() ? `/?${params.toString()}` : "/");
 }

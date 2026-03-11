@@ -1,7 +1,8 @@
 import { access, readFile, stat } from "node:fs/promises";
 import { join, extname, resolve, relative } from "node:path";
-import { resolveWorkspaceRoot, parseSimpleYaml } from "@/lib/workspace";
+import { resolveWorkspaceRoot } from "@/lib/workspace";
 import { injectBridgeIntoHtml } from "@/lib/app-bridge";
+import { loadWorkspaceAppManifest } from "@/lib/workspace-apps";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -76,26 +77,8 @@ export async function GET(req: Request) {
 
   // Meta-only request: return parsed .dench.yaml manifest
   if (metaOnly) {
-    const manifestPath = join(appAbsPath, ".dench.yaml");
-    if (!await pathExists(manifestPath)) {
-      return Response.json({ name: appPath.split("/").pop()?.replace(/\.dench\.app$/, "") || "App" });
-    }
-    try {
-      const content = await readFile(manifestPath, "utf-8");
-      const parsed = parseSimpleYaml(content);
-      return Response.json({
-        name: parsed.name || appPath.split("/").pop()?.replace(/\.dench\.app$/, "") || "App",
-        description: parsed.description,
-        icon: parsed.icon,
-        version: parsed.version,
-        author: parsed.author,
-        entry: parsed.entry || "index.html",
-        runtime: parsed.runtime || "static",
-        permissions: parsed.permissions,
-      });
-    } catch {
-      return Response.json({ name: "App" });
-    }
+    const manifest = await loadWorkspaceAppManifest(appPath);
+    return Response.json(manifest ?? { name: "App" });
   }
 
   // Serve a specific file from the app directory
