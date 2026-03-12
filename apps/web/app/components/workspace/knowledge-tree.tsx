@@ -27,16 +27,20 @@ function FolderIcon({ open }: { open?: boolean }) {
 
 function TableIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3v18" /><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M3 9h18" /><path d="M3 15h18" />
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="#42a97a" fillOpacity="0.15" stroke="#42a97a" strokeWidth="1.2" />
+      <path d="M1.5 6.5h13" stroke="#42a97a" strokeWidth="1.2" />
+      <path d="M6 6.5v7" stroke="#42a97a" strokeWidth="1.2" />
     </svg>
   );
 }
 
 function KanbanIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect width="6" height="14" x="2" y="5" rx="1" /><rect width="6" height="10" x="9" y="5" rx="1" /><rect width="6" height="16" x="16" y="3" rx="1" />
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <rect x="1.5" y="2.5" width="3.5" height="9.5" rx="1" fill="#8b7cf6" fillOpacity="0.18" stroke="#8b7cf6" strokeWidth="1.1" />
+      <rect x="6.25" y="2.5" width="3.5" height="6.5" rx="1" fill="#8b7cf6" fillOpacity="0.18" stroke="#8b7cf6" strokeWidth="1.1" />
+      <rect x="11" y="2.5" width="3.5" height="11" rx="1" fill="#8b7cf6" fillOpacity="0.18" stroke="#8b7cf6" strokeWidth="1.1" />
     </svg>
   );
 }
@@ -199,18 +203,6 @@ function TreeNodeItem({
           {node.name.replace(/\.md$/, "")}
         </span>
 
-        {/* Type badge for objects */}
-        {node.type === "object" && (
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0"
-            style={{
-              background: "var(--color-accent-light)",
-              color: "var(--color-accent)",
-            }}
-          >
-            {node.defaultView === "kanban" ? "board" : "table"}
-          </span>
-        )}
       </button>
 
       {/* Children */}

@@ -14,6 +14,7 @@ type TabBarProps = {
   onCloseAll: () => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onTogglePin: (tabId: string) => void;
+  onNewTab?: () => void;
   leftContent?: React.ReactNode;
   rightContent?: React.ReactNode;
 };
@@ -34,6 +35,7 @@ export function TabBar({
   onCloseAll,
   onReorder,
   onTogglePin,
+  onNewTab,
   leftContent,
   rightContent,
 }: TabBarProps) {
@@ -99,10 +101,9 @@ export function TabBar({
   return (
     <>
       <div
-        className="flex items-stretch flex-shrink-0 h-[34px]"
+        className="flex items-stretch shrink-0 h-[36px] relative"
         style={{
-          background: "var(--color-surface)",
-          borderBottom: "1px solid var(--color-border)",
+          background: "var(--color-bg)",
         }}
       >
         <div
@@ -119,7 +120,6 @@ export function TabBar({
           const isActive = tab.id === activeTabId;
           const isDragOver = dragOverIndex === index && dragIndex !== index;
           const isHome = tab.id === HOME_TAB_ID;
-
           return (
             <button
               key={tab.id}
@@ -132,11 +132,10 @@ export function TabBar({
               onDragOver={isHome ? undefined : (e) => handleDragOver(e, index)}
               onDrop={isHome ? undefined : (e) => handleDrop(e, index)}
               onDragEnd={isHome ? undefined : handleDragEnd}
-              className={`group flex items-center gap-1.5 text-[12.5px] font-medium cursor-pointer flex-shrink-0 relative transition-colors duration-75 select-none ${isHome ? "px-2.5" : "pl-3 pr-1.5"} ${isActive ? "mb-[-1px] rounded-t-lg" : ""}`}
+              className={`group flex items-center gap-1.5 text-[12.5px] font-medium cursor-pointer shrink-0 relative transition-colors duration-75 select-none border-none outline-none ${isHome ? "px-2.5" : "pl-3 pr-1.5"} ${isActive ? "chrome-tab-active rounded-t-[8px] z-2" : "z-1"}`}
               style={{
                 color: isActive ? "var(--color-text)" : "var(--color-text-muted)",
-                background: isActive ? "var(--color-main-bg)" : "transparent",
-                borderBottom: isActive ? "1px solid var(--color-main-bg)" : "none",
+                background: isActive ? "var(--color-surface)" : "transparent",
                 borderLeft: isDragOver && !isHome ? "2px solid var(--color-accent)" : undefined,
                 opacity: dragIndex === index ? 0.5 : 1,
                 maxWidth: isHome ? undefined : 200,
@@ -173,9 +172,22 @@ export function TabBar({
             </button>
           );
         })}
+        {onNewTab && (
+          <button
+            type="button"
+            onClick={onNewTab}
+            className="flex items-center justify-center w-7 h-7 rounded-md shrink-0 self-center cursor-pointer transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+            style={{ color: "var(--color-text-muted)" }}
+            title="New chat"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v14" /><path d="M5 12h14" />
+            </svg>
+          </button>
+        )}
         </div>
         {rightContent && (
-          <div className="relative flex items-center gap-0.5 px-2 shrink-0 h-[34px]">
+          <div className="relative flex items-center gap-0.5 px-2 shrink-0">
             {rightContent}
           </div>
         )}

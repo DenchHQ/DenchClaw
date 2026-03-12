@@ -59,7 +59,7 @@ import {
   generateTabId, loadTabs, saveTabs, openTab, closeTab,
   closeOtherTabs, closeTabsToRight, closeAllTabs,
   activateTab, reorderTabs, togglePinTab,
-  inferTabType, inferTabTitle,
+  inferTabType, inferTabTitle, updateTabTitle,
 } from "@/lib/tab-state";
 import dynamic from "next/dynamic";
 
@@ -978,10 +978,27 @@ function WorkspacePageInner() {
       setTabState((prev) => activateTab(prev, tabId));
       return;
     }
+    let tab: Tab | undefined;
     setTabState((prev) => {
       const next = activateTab(prev, tabId);
-      const tab = next.tabs.find((t) => t.id === tabId);
-      if (tab?.path) {
+      tab = next.tabs.find((t) => t.id === tabId);
+      return next;
+    });
+    requestAnimationFrame(() => {
+      if (!tab) return;
+      if (tab.type === "chat") {
+        setActivePath(null);
+        setContent({ kind: "none" });
+        if (tab.sessionId) {
+          setActiveSessionId(tab.sessionId);
+          setActiveSubagentKey(null);
+          void chatRef.current?.loadSession(tab.sessionId);
+        } else {
+          setActiveSessionId(null);
+          setActiveSubagentKey(null);
+          void chatRef.current?.newSession();
+        }
+      } else if (tab.path) {
         const node = resolveNode(tree, tab.path);
         if (node) {
           void loadContent(node);
@@ -995,30 +1012,36 @@ function WorkspacePageInner() {
           if (job) setContent({ kind: "cron-job", jobId, job });
         }
       }
-      return next;
     });
   }, [tree, loadContent, cronJobs]);
 
   const handleTabClose = useCallback((tabId: string) => {
-    setTabState((prev) => {
-      const next = closeTab(prev, tabId);
-      if (next.activeTabId !== prev.activeTabId) {
-        if (next.activeTabId === HOME_TAB_ID || !next.activeTabId) {
-          setActivePath(null);
-          setContent({ kind: "none" });
-        } else {
-          const newActive = next.tabs.find((t) => t.id === next.activeTabId);
-          if (newActive?.path) {
-            const node = resolveNode(tree, newActive.path);
-            if (node) {
-              void loadContent(node);
-            }
-          }
+    const prev = tabState;
+    const next = closeTab(prev, tabId);
+    setTabState(next);
+    if (next.activeTabId !== prev.activeTabId) {
+      const newActive = next.tabs.find((t) => t.id === next.activeTabId);
+      if (!newActive || newActive.id === HOME_TAB_ID) {
+        setActivePath(null);
+        setContent({ kind: "none" });
+      } else if (newActive.type === "chat") {
+        setActivePath(null);
+        setContent({ kind: "none" });
+        if (newActive.sessionId) {
+          setActiveSessionId(newActive.sessionId);
+          setActiveSubagentKey(null);
+          requestAnimationFrame(() => {
+            void chatRef.current?.loadSession(newActive.sessionId!);
+          });
+        }
+      } else if (newActive.path) {
+        const node = resolveNode(tree, newActive.path);
+        if (node) {
+          void loadContent(node);
         }
       }
-      return next;
-    });
-  }, [tree, loadContent]);
+    }
+  }, [tree, loadContent, tabState]);
 
   // Keep ref in sync so keyboard shortcut can close active tab
   useEffect(() => {
@@ -1795,6 +1818,17 @@ function WorkspacePageInner() {
     return s?.title || undefined;
   }, [activeSessionId, sessions]);
 
+  useEffect(() => {
+    if (!activeSessionTitle) return;
+    setTabState((prev) => {
+      const active = prev.tabs.find((t) => t.id === prev.activeTabId);
+      if (active?.type === "chat" && active.title !== activeSessionTitle) {
+        return updateTabTitle(prev, active.id, activeSessionTitle);
+      }
+      return prev;
+    });
+  }, [activeSessionTitle]);
+
   // Whether to show the main ChatPanel (no file/content selected)
   const showMainChat = !activePath || content.kind === "none";
 
@@ -1921,7 +1955,7 @@ function WorkspacePageInner() {
 
 
       {/* Main content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden" style={{ background: "var(--color-main-bg)" }}>
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden" style={{ background: "var(--color-surface)" }}>
         {/* Mobile top bar — always visible on mobile */}
         {isMobile && (
           <div
@@ -1989,6 +2023,21 @@ function WorkspacePageInner() {
             onCloseAll={handleTabCloseAll}
             onReorder={handleTabReorder}
             onTogglePin={handleTabTogglePin}
+            onNewTab={() => {
+              const newTab: Tab = {
+                id: generateTabId(),
+                type: "chat",
+                title: "New Chat",
+              };
+              setActivePath(null);
+              setContent({ kind: "none" });
+              setActiveSessionId(null);
+              setActiveSubagentKey(null);
+              setTabState((prev) => openTab(prev, newTab));
+              requestAnimationFrame(() => {
+                void chatRef.current?.newSession();
+              });
+            }}
             rightContent={showMainChat ? (
               <>
                 <div className="relative" ref={chatPopoverRef}>
@@ -2142,6 +2191,20 @@ function WorkspacePageInner() {
                   onActiveSessionChange={activeSubagent ? undefined : (id) => {
                     setActiveSessionId(id);
                     setActiveSubagentKey(null);
+                    if (id) {
+                      setTabState((prev) => {
+                        const active = prev.tabs.find((t) => t.id === prev.activeTabId);
+                        if (active?.type === "chat" && !active.sessionId) {
+                          return {
+                            ...prev,
+                            tabs: prev.tabs.map((t) =>
+                              t.id === active.id ? { ...t, sessionId: id } : t,
+                            ),
+                          };
+                        }
+                        return prev;
+                      });
+                    }
                   }}
                   onSessionsChange={activeSubagent ? undefined : refreshSessions}
                   onSubagentSpawned={activeSubagent ? undefined : handleSubagentSpawned}

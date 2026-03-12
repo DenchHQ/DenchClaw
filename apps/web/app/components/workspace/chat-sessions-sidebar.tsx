@@ -452,11 +452,11 @@ export function ChatSessionsSidebar({
 			</div>
 			{/* Header overlay: backdrop blur + 80% bg; list scrolls under it */}
 			<div
-				className={`absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-2 backdrop-blur-md ${embedded ? "" : "border-b"}`}
+				className={`absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-2 backdrop-blur-md ${embedded ? "border-b border-neutral-400/15 bg-neutral-100/50 dark:bg-neutral-900/50" : "border-b"}`}
 				style={{
 					height: headerHeight,
 					borderColor: embedded ? undefined : "var(--color-border)",
-					background: embedded ? "transparent" : "color-mix(in srgb, var(--color-sidebar-bg) 80%, transparent)",
+					background: embedded ? undefined : "color-mix(in srgb, var(--color-sidebar-bg) 80%, transparent)",
 				}}
 			>
 				<div className="min-w-0 flex-1 flex items-center gap-1.5">
@@ -484,10 +484,10 @@ export function ChatSessionsSidebar({
 				<button
 					type="button"
 					onClick={onNewSession}
-					className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer shrink-0 ml-1.5"
+					className={`flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium transition-all cursor-pointer shrink-0 ml-1.5 ${embedded ? "hover:bg-neutral-400/15" : ""}`}
 					style={{
-						color: "var(--color-chat-sidebar-active-text)",
-						background: "var(--color-chat-sidebar-active-bg)",
+						color: embedded ? "var(--color-text)" : "var(--color-chat-sidebar-active-text)",
+						background: embedded ? "transparent" : "var(--color-chat-sidebar-active-bg)",
 					}}
 					title="New chat"
 				>

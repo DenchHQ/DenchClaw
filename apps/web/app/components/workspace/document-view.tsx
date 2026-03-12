@@ -107,17 +107,39 @@ export function DocumentView({
   // Intercept workspace-internal links in read mode (delegated click handler)
   const handleLinkClick = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (!onNavigate) {return;}
       const target = event.target as HTMLElement;
       const link = target.closest("a");
       if (!link) {return;}
       const href = link.getAttribute("href");
       if (!href) {return;}
-      if (isWorkspaceLink(href)) {
+
+      if (href.startsWith("#")) {
+        event.preventDefault();
+        event.stopPropagation();
+        const slug = href.slice(1);
+        const container = (event.currentTarget as HTMLElement);
+        const allHeadings = Array.from(container.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+        const match = allHeadings.find((h) => {
+          const text = (h.textContent || "").trim().toLowerCase()
+            .replace(/[^\w\s-]/g, "").replace(/\s+/g, "-");
+          return text === slug;
+        }) ?? container.querySelector(`[id="${CSS.escape(slug)}"]`);
+        match?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+
+      if (!onNavigate) {return;}
+
+      if (isWorkspaceLink(href) || (!href.startsWith("http://") && !href.startsWith("https://") && !href.startsWith("mailto:"))) {
         event.preventDefault();
         event.stopPropagation();
         onNavigate(href);
+        return;
       }
+
+      event.preventDefault();
+      event.stopPropagation();
+      window.open(href, "_blank", "noopener,noreferrer");
     },
     [onNavigate],
   );

@@ -2219,18 +2219,16 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							>
 								Chat: {fileContext.filename}
 							</h2>
-						) : (
+						) : currentSessionId ? (
 							<h2
 								className="text-sm font-semibold"
 								style={{
 									color: "var(--color-text)",
 								}}
 							>
-								{currentSessionId
-									? (sessionTitle || "Chat Session")
-									: "New Chat"}
+								{sessionTitle || "Chat Session"}
 							</h2>
-						)}
+						) : null}
 					</div>
 					{!hideHeaderActions && (
 					<div className="flex items-center gap-1 shrink-0">

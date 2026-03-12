@@ -434,7 +434,7 @@ export function WorkspaceSidebar({
 		>
 			{/* Header */}
 			<div
-				className="flex items-center gap-2 px-3 h-[34px] border-b"
+				className="flex items-center gap-2 px-3 h-[36px] border-b"
 				style={{ borderColor: "var(--color-border)" }}
 			>
 				{isBrowsing ? (

@@ -1927,3 +1927,24 @@ body {
 .spreadsheet-editor-grid .Spreadsheet__data-editor input {
   padding: 4px 8px;
 }
+
+/* Chrome-style tab connectors */
+.chrome-tab-active::before,
+.chrome-tab-active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  pointer-events: none;
+}
+
+.chrome-tab-active::before {
+  left: -8px;
+  background: radial-gradient(circle at 0 0, transparent 7.5px, var(--color-surface) 8px);
+}
+
+.chrome-tab-active::after {
+  right: -8px;
+  background: radial-gradient(circle at 100% 0, transparent 7.5px, var(--color-surface) 8px);
+}

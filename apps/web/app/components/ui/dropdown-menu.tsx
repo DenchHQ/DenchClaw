@@ -49,7 +49,7 @@ function DropdownMenuContent({
 	return (
 		<MenuPrimitive.Portal>
 			<MenuPrimitive.Positioner
-				className="isolate z-[100] outline-none"
+				className="isolate z-[10000] outline-none"
 				align={align}
 				alignOffset={alignOffset}
 				side={side}
