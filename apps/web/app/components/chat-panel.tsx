@@ -11,7 +11,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { motion, LayoutGroup } from "framer-motion";
 import {
 	Mail, Users, DollarSign, Calendar, Zap, FileText, Database,
 	Code, Bug, Clock, BarChart3, PenTool, Globe, Search, Sparkles,
@@ -856,6 +855,9 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const [showFilePicker, setShowFilePicker] =
 			useState(false);
 
+		const [mounted, setMounted] = useState(false);
+		useEffect(() => { setMounted(true); }, []);
+
 		// ── Reconnection state ──
 		const [isReconnecting, setIsReconnecting] = useState(false);
 		const reconnectAbortRef = useRef<AbortController | null>(null);
@@ -884,10 +886,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const [rawView, _setRawView] = useState(false);
 
 		// ── Hero state (new chat screen) ──
-		const [greeting, setGreeting] = useState("");
-		const [visiblePrompts, setVisiblePrompts] = useState<typeof PROMPT_SUGGESTIONS>([]);
+		const [greeting, setGreeting] = useState("How can I help?");
+		const [visiblePrompts, setVisiblePrompts] = useState(PROMPT_SUGGESTIONS.slice(0, 7));
+		const heroInitRef = useRef(false);
 
 		useEffect(() => {
+			if (heroInitRef.current) return;
+			heroInitRef.current = true;
 			const greetings = [
 				"Ready to build?",
 				"Let's automate something?",
@@ -904,9 +909,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			};
 			const allGreetings = [getTimeGreeting(), ...greetings];
 			setGreeting(allGreetings[Math.floor(Math.random() * allGreetings.length)]);
-		}, []);
-
-		useEffect(() => {
 			const shuffled = [...PROMPT_SUGGESTIONS].sort(() => 0.5 - Math.random());
 			setVisiblePrompts(shuffled.slice(0, 7));
 		}, []);
@@ -2156,7 +2158,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		// ── Render ──
 
 		return (
-			<LayoutGroup>
 			<div
 				className="h-full flex flex-col"
 				style={{ background: "var(--color-main-bg)" }}
@@ -2319,6 +2320,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				<div
 					ref={scrollContainerRef}
 					className="flex-1 overflow-y-auto min-h-0"
+					style={{ scrollbarGutter: "stable" }}
 				>
 				{/* Messages */}
 				<div
@@ -2342,70 +2344,27 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								</p>
 							</div>
 						</div>
+					) : (showHeroState && !mounted) ? (
+						<div className="flex items-center justify-center h-full min-h-[60vh]" />
 					) : showHeroState ? (
 						<div className="flex flex-col items-center justify-center min-h-[75vh] py-12">
 							{/* Hero greeting */}
 							{greeting && (
-								<motion.h1
-									layout="position"
+								<h1
 									className="text-4xl md:text-5xl font-light tracking-normal font-instrument mb-10 text-center"
 									style={{ color: "var(--color-text)" }}
-									initial="hidden"
-									animate="visible"
-									variants={{
-										hidden: { opacity: 0 },
-										visible: {
-											opacity: 1,
-											transition: { staggerChildren: 0.12, delayChildren: 0.2 },
-										},
-									}}
-									transition={{ layout: { type: "spring", stiffness: 260, damping: 30 } }}
 								>
-									{greeting.split(" ").map((word, i) => (
-										<motion.span
-											key={i}
-											className="inline-block mr-2"
-											variants={{
-												hidden: { opacity: 0, y: 20, filter: "blur(8px)" },
-												visible: {
-													opacity: 1,
-													y: 0,
-													filter: "blur(0px)",
-													transition: { duration: 0.8, ease: [0.2, 0.65, 0.3, 0.9] },
-												},
-											}}
-										>
-											{word}
-										</motion.span>
-									))}
-								</motion.h1>
+									{greeting}
+								</h1>
 							)}
 
 							{/* Centered input bar */}
-							<motion.div
-								layout="position"
-								className="w-full max-w-[720px] mx-auto px-4"
-								initial={{ opacity: 0, y: 20 }}
-								animate={{ opacity: 1, y: 0 }}
-								transition={{ duration: 0.8, delay: 0.8, ease: [0.22, 1, 0.36, 1], layout: { type: "spring", stiffness: 260, damping: 30 } }}
-							>
-								<motion.div
-									layout
-									layoutId="chat-input-bar"
-									transition={{ type: "spring", stiffness: 260, damping: 30 }}
-								>
-									{inputBarContainer(handleInputDragOver, handleInputDragLeave, handleInputDrop)}
-								</motion.div>
-							</motion.div>
+							<div className="w-full max-w-[720px] mx-auto px-4">
+								{inputBarContainer(handleInputDragOver, handleInputDragLeave, handleInputDrop)}
+							</div>
 
 							{/* Prompt suggestion pills */}
-							<motion.div
-								layout="position"
-								className="mt-6 flex flex-col gap-2.5 w-full max-w-[720px] mx-auto px-4"
-								initial={{ opacity: 0, y: 10 }}
-								animate={{ opacity: 1, y: 0 }}
-								transition={{ duration: 0.5, delay: 1.0, ease: [0.22, 1, 0.36, 1], layout: { type: "spring", stiffness: 260, damping: 30 } }}
-							>
+							<div className="mt-6 flex flex-col gap-2.5 w-full max-w-[720px] mx-auto px-4">
 								<div className="flex items-center justify-center gap-2 flex-wrap">
 									{visiblePrompts.slice(0, 3).map((template) => {
 										const Icon = template.icon;
@@ -2448,7 +2407,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 										);
 									})}
 								</div>
-							</motion.div>
+							</div>
 						</div>
 					) : messages.length === 0 ? (
 						<div className="flex items-center justify-center h-full min-h-[60vh]">
@@ -2546,13 +2505,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						style={{ background: "var(--color-bg-glass)" }}
 					>
 						<div className={compact ? "" : "max-w-[720px] mx-auto"}>
-							<motion.div
-								layout
-								layoutId="chat-input-bar"
-								transition={{ type: "spring", stiffness: 260, damping: 30 }}
-							>
-								{inputBarContainer(handleInputDragOver, handleInputDragLeave, handleInputDrop)}
-							</motion.div>
+							{inputBarContainer(handleInputDragOver, handleInputDragLeave, handleInputDrop)}
 						</div>
 					</div>
 				)}
@@ -2569,7 +2522,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				)}
 
 			</div>
-			</LayoutGroup>
 		);
 	},
 );

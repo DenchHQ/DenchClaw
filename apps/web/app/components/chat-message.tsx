@@ -777,12 +777,14 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onS
 		const attachmentInfo = parseAttachments(textContent);
 		const richHtml = userHtmlMap?.get(message.id) ?? userHtmlMap?.get(textContent) ?? userHtmlMap?.get(attachmentInfo?.message ?? "");
 
-		const bubbleContent = <p className="whitespace-pre-wrap wrap-break-word m-0">{attachmentInfo?.message ?? textContent}</p>;
+		const bubbleContent = richHtml
+			? <div className="chat-user-html-content" dangerouslySetInnerHTML={{ __html: richHtml }} />
+			: <p className="whitespace-pre-wrap break-words">{attachmentInfo?.message ?? textContent}</p>;
 
 		if (attachmentInfo) {
 			return (
 				<div className="flex flex-col items-end gap-1.5 py-2">
-					<AttachedFilesCard paths={attachmentInfo.paths} />
+					{!richHtml && <AttachedFilesCard paths={attachmentInfo.paths} />}
 					{(attachmentInfo.message || richHtml) && (
 						<div
 							className="max-w-[80%] w-fit rounded-2xl rounded-br-sm px-3 py-2 text-sm leading-6 break-words chat-message-font"

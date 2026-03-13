@@ -529,7 +529,17 @@ function WorkspacePageInner() {
     if (tabLoadedForWorkspace.current === key) return;
     tabLoadedForWorkspace.current = key;
     const loaded = loadTabs(key);
-    setTabState(loaded);
+    const hasNonHomeTabs = loaded.tabs.some((t) => t.id !== HOME_TAB_ID);
+    if (!hasNonHomeTabs) {
+      const newTab: Tab = {
+        id: generateTabId(),
+        type: "chat",
+        title: "New Chat",
+      };
+      setTabState(openTab(loaded, newTab));
+    } else {
+      setTabState(loaded);
+    }
   }, [workspaceName]);
 
   // Persist tabs to localStorage on change (only after initial load for this workspace)
@@ -1017,7 +1027,25 @@ function WorkspacePageInner() {
 
   const handleTabClose = useCallback((tabId: string) => {
     const prev = tabState;
-    const next = closeTab(prev, tabId);
+    let next = closeTab(prev, tabId);
+    const hasNonHomeTabs = next.tabs.some((t) => t.id !== HOME_TAB_ID);
+    if (!hasNonHomeTabs) {
+      const newTab: Tab = {
+        id: generateTabId(),
+        type: "chat",
+        title: "New Chat",
+      };
+      next = openTab(next, newTab);
+      setTabState(next);
+      setActivePath(null);
+      setContent({ kind: "none" });
+      setActiveSessionId(null);
+      setActiveSubagentKey(null);
+      requestAnimationFrame(() => {
+        void chatRef.current?.newSession();
+      });
+      return;
+    }
     setTabState(next);
     if (next.activeTabId !== prev.activeTabId) {
       const newActive = next.tabs.find((t) => t.id === next.activeTabId);
@@ -1062,10 +1090,20 @@ function WorkspacePageInner() {
 
   const handleTabCloseAll = useCallback(() => {
     setTabState((prev) => {
-      const next = closeAllTabs(prev);
+      const closed = closeAllTabs(prev);
       setActivePath(null);
       setContent({ kind: "none" });
-      return next;
+      setActiveSessionId(null);
+      setActiveSubagentKey(null);
+      const newTab: Tab = {
+        id: generateTabId(),
+        type: "chat",
+        title: "New Chat",
+      };
+      return openTab(closed, newTab);
+    });
+    requestAnimationFrame(() => {
+      void chatRef.current?.newSession();
     });
   }, []);
 

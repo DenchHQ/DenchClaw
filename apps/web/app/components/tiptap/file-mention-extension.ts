@@ -83,7 +83,7 @@ export const FileMentionNode = Node.create({
 				},
 				HTMLAttributes,
 			),
-			`@${label}`,
+			label,
 		];
 	},
 });
