@@ -27,9 +27,9 @@
   --color-text-muted: #8a8a82;
 
   /* Accent */
-  --color-accent: #01735C;
-  --color-accent-hover: #015C4A;
-  --color-accent-light: rgba(1, 115, 92, 0.08);
+  --color-accent: #4FA1EE;
+  --color-accent-hover: #3B8FDE;
+  --color-accent-light: rgba(79, 161, 238, 0.08);
 
   /* Chat */
   --color-user-bubble: #eae8e4;
@@ -117,9 +117,9 @@
   --color-text-muted: #78776f;
 
   /* Accent */
-  --color-accent: #01735C;
-  --color-accent-hover: #1A8A6F;
-  --color-accent-light: rgba(1, 115, 92, 0.12);
+  --color-accent: #4FA1EE;
+  --color-accent-hover: #6BB3F5;
+  --color-accent-light: rgba(79, 161, 238, 0.12);
 
   /* Chat */
   --color-user-bubble: #1e1e1c;
