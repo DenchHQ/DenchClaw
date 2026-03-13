@@ -1892,7 +1892,7 @@ function WorkspacePageInner() {
         )
       ) : (
           <div
-            className="flex shrink-0 flex-col relative overflow-hidden"
+            className="sidebar-animate flex shrink-0 flex-col relative overflow-hidden"
             style={{
               width: leftSidebarCollapsed ? 0 : leftSidebarWidth,
               minWidth: leftSidebarCollapsed ? 0 : leftSidebarWidth,
@@ -2213,7 +2213,7 @@ function WorkspacePageInner() {
 
           {!isMobile && showMainChat && (
             <aside
-              className="flex-shrink-0 min-h-0 border-l flex flex-col relative overflow-hidden"
+              className="sidebar-animate flex-shrink-0 min-h-0 border-l flex flex-col relative overflow-hidden"
               style={{
                 width: chatSidebarOpen ? chatSidebarWidth : 0,
                 borderColor: chatSidebarOpen ? "var(--color-border)" : "transparent",
@@ -2258,7 +2258,7 @@ function WorkspacePageInner() {
 
           {!isMobile && !showMainChat && fileContext && (
             <aside
-              className="flex-shrink-0 min-h-0 border-l flex flex-col relative overflow-hidden"
+              className="sidebar-animate flex-shrink-0 min-h-0 border-l flex flex-col relative overflow-hidden"
               style={{
                 width: showChatSidebar && !rightSidebarCollapsed ? rightSidebarWidth : 0,
                 borderColor: showChatSidebar && !rightSidebarCollapsed ? "var(--color-border)" : "transparent",
