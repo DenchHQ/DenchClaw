@@ -44,7 +44,7 @@ const PROMPT_SUGGESTIONS = [
 		id: "enrich-contacts",
 		label: "Enrich Leads",
 		icon: Users,
-		prompt: "When a new contact is added to my CRM, find their LinkedIn profile and company details and update the record",
+		prompt: "Enrich my CRM contacts with job titles, company details, and verified emails",
 	},
 	{
 		id: "invoice-reminder",

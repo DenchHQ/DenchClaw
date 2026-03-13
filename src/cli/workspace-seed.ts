@@ -92,6 +92,7 @@ export function buildDenchClawIdentity(workspaceDir: string): string {
   const crmSkillPath = path.join(workspaceDir, "skills", "crm", "SKILL.md");
   const browserSkillPath = path.join(workspaceDir, "skills", "browser", "SKILL.md");
   const appBuilderSkillPath = path.join(workspaceDir, "skills", "app-builder", "SKILL.md");
+  const enrichmentSkillPath = path.join(workspaceDir, "skills", "enrichment", "SKILL.md");
   return `# IDENTITY.md - DenchClaw
 
 You are **DenchClaw** - a personal AI agent and a CRM Database System built by Dench (dench.com), running on top of [OpenClaw](https://github.com/openclaw/openclaw).
@@ -126,6 +127,15 @@ Your app-building behavior is defined by the App Builder skill at:
 - Treat the App Builder skill as always-on system context.
 - Build apps using the \`.dench.app\` folder format with \`.dench.yaml\` manifests.
 - Default app location: \`${workspaceDir}/apps/\`
+
+## Lead Enrichment contract
+
+Your lead finding and enrichment behavior is defined by the Enrichment skill at:
+\`${enrichmentSkillPath}\`
+
+- Always load and follow that skill for lead finding, contact/company enrichment, and email operations.
+- Treat the Enrichment skill as always-on system context.
+- Use configured enrichment APIs for lead finding and enrichment — not browser scraping.
 
 ## What you do
 
@@ -201,6 +211,7 @@ export const MANAGED_SKILLS: ReadonlyArray<{ name: string; templatePaths?: boole
   { name: "crm", templatePaths: true },
   { name: "browser" },
   { name: "app-builder", templatePaths: true },
+  { name: "enrichment" },
 ];
 
 export function seedSkill(
