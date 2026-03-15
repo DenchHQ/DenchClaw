@@ -212,6 +212,14 @@ describe("agent-runner", () => {
 			expect(params.client.mode).toBe("backend");
 		});
 
+		it("requests operator.admin only so agent startup works with admin-scoped gateway auth", async () => {
+			const { buildConnectParams } = await import("./agent-runner.js");
+			const params = buildConnectParams({ url: "ws://127.0.0.1:19001" }) as {
+				scopes?: string[];
+			};
+			expect(params.scopes).toEqual(["operator.admin"]);
+		});
+
 		it("advertises tool-events capability for tool stream parity", async () => {
 			const { buildConnectParams } = await import("./agent-runner.js");
 			const params = buildConnectParams({ url: "ws://127.0.0.1:19001" }) as {
