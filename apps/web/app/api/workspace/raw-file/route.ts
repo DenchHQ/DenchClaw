@@ -1,6 +1,10 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import { safeResolvePath, safeResolveNewPath, resolveWorkspaceRoot, isSystemFile } from "@/lib/workspace";
+import {
+  resolveFilesystemPath,
+  resolveWorkspaceRoot,
+  isProtectedSystemPath,
+} from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -50,18 +54,10 @@ const MIME_MAP: Record<string, string> = {
  * Security note: this is a local-only dev server; it never runs in production.
  */
 function resolveFile(path: string): string | null {
-	// 1. Absolute path — serve directly if it exists on disk
-	if (path.startsWith("/")) {
-		const abs = resolve(path);
-		if (existsSync(abs)) {return abs;}
-		// Fall through to workspace-relative in case the leading / is accidental
-	}
+	const resolvedPath = resolveFilesystemPath(path);
+	if (resolvedPath) {return resolvedPath.absolutePath;}
 
-	// 2. Standard workspace-relative resolution
-	const resolved = safeResolvePath(path);
-	if (resolved) {return resolved;}
-
-	// 3. Try common subdirectories in case the path is a bare filename
+	// 2. Try common subdirectories in case the path is a bare filename
 	const root = resolveWorkspaceRoot();
 	if (!root) {return null;}
 	const rootAbs = resolve(root);
@@ -139,12 +135,12 @@ export async function POST(req: Request) {
 		return new Response("Missing path", { status: 400 });
 	}
 
-	if (isSystemFile(path)) {
+	const targetPath = resolveFilesystemPath(path, { allowMissing: true });
+	if (isProtectedSystemPath(targetPath)) {
 		return Response.json({ error: "Cannot modify system file" }, { status: 403 });
 	}
 
-	const absPath = safeResolveNewPath(path);
-	if (!absPath) {
+	if (!targetPath) {
 		return Response.json(
 			{ error: "Invalid path or path traversal rejected" },
 			{ status: 400 },
@@ -153,8 +149,8 @@ export async function POST(req: Request) {
 
 	try {
 		const buffer = Buffer.from(await req.arrayBuffer());
-		mkdirSync(dirname(absPath), { recursive: true });
-		writeFileSync(absPath, buffer);
+		mkdirSync(dirname(targetPath.absolutePath), { recursive: true });
+		writeFileSync(targetPath.absolutePath, buffer);
 		return Response.json({ ok: true, path });
 	} catch (err) {
 		return Response.json(

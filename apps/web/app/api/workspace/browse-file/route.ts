@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
-import { resolve, normalize } from "node:path";
+import { resolveFilesystemPath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,8 +44,15 @@ export async function GET(req: Request) {
 		);
 	}
 
-	// Normalize and resolve to prevent traversal
-	const resolved = resolve(normalize(filePath));
+	const resolvedPath = resolveFilesystemPath(filePath);
+	if (!resolvedPath) {
+		return Response.json(
+			{ error: "File not found" },
+			{ status: 404 },
+		);
+	}
+
+	const resolved = resolvedPath.absolutePath;
 
 	if (!existsSync(resolved)) {
 		return Response.json(

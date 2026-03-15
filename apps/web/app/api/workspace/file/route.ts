@@ -1,6 +1,11 @@
 import { writeFileSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname } from "node:path";
-import { readWorkspaceFile, safeResolvePath, safeResolveNewPath, isSystemFile } from "@/lib/workspace";
+import {
+  readWorkspaceFile,
+  safeResolvePath,
+  resolveFilesystemPath,
+  isProtectedSystemPath,
+} from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -49,16 +54,15 @@ export async function POST(req: Request) {
     );
   }
 
-  if (isSystemFile(relPath)) {
+  const targetPath = resolveFilesystemPath(relPath, { allowMissing: true });
+  if (isProtectedSystemPath(targetPath)) {
     return Response.json(
       { error: "Cannot modify system file" },
       { status: 403 },
     );
   }
 
-  // Use safeResolveNewPath (not safeResolvePath) because the file may not exist yet
-  const absPath = safeResolveNewPath(relPath);
-  if (!absPath) {
+  if (!targetPath) {
     return Response.json(
       { error: "Invalid path or path traversal rejected" },
       { status: 400 },
@@ -66,8 +70,8 @@ export async function POST(req: Request) {
   }
 
   try {
-    mkdirSync(dirname(absPath), { recursive: true });
-    writeFileSync(absPath, content, "utf-8");
+    mkdirSync(dirname(targetPath.absolutePath), { recursive: true });
+    writeFileSync(targetPath.absolutePath, content, "utf-8");
     return Response.json({ ok: true, path: relPath });
   } catch (err) {
     return Response.json(
@@ -100,14 +104,15 @@ export async function DELETE(req: Request) {
     );
   }
 
-  if (isSystemFile(relPath)) {
+  const targetPath = resolveFilesystemPath(relPath);
+  if (isProtectedSystemPath(targetPath)) {
     return Response.json(
       { error: "Cannot delete system file" },
       { status: 403 },
     );
   }
 
-  const absPath = safeResolvePath(relPath);
+  const absPath = targetPath?.absolutePath ?? safeResolvePath(relPath);
   if (!absPath) {
     return Response.json(
       { error: "File not found or path traversal rejected" },

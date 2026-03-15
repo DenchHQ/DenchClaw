@@ -28,6 +28,7 @@ import {
   matrixToCsv,
   selectionStats,
 } from "./spreadsheet-utils";
+import { fileWriteUrl } from "@/lib/workspace-paths";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -622,7 +623,7 @@ export function SpreadsheetEditor({
       if (isTextSpreadsheet(filename)) {
         const sep = fileExt(filename) === "tsv" ? "\t" : ",";
         const text = matrixToCsv(sheets[activeSheet].data, sep);
-        const res = await fetch("/api/workspace/file", {
+        const res = await fetch(fileWriteUrl(filePath), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: filePath, content: text }),

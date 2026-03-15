@@ -17,6 +17,10 @@ export function registerBootstrapCommand(program: Command) {
     .option("--update-now", "Run OpenClaw update before onboarding", false)
     .option("--gateway-port <port>", "Gateway port override for first-run onboarding")
     .option("--web-port <port>", "Preferred web UI port (default: 3100)")
+    .option("--dench-cloud", "Configure Dench Cloud and skip OpenClaw provider onboarding", false)
+    .option("--dench-cloud-api-key <key>", "Dench Cloud API key for bootstrap-driven setup")
+    .option("--dench-cloud-model <id>", "Stable or public Dench Cloud model id to use as default")
+    .option("--dench-gateway-url <url>", "Override the Dench Cloud gateway base URL")
     .option("--no-open", "Do not open the browser automatically")
     .option("--json", "Output summary as JSON", false)
     .addHelpText(
@@ -35,6 +39,10 @@ export function registerBootstrapCommand(program: Command) {
           updateNow: Boolean(opts.updateNow),
           gatewayPort: opts.gatewayPort as string | undefined,
           webPort: opts.webPort as string | undefined,
+          denchCloud: opts.denchCloud ? true : undefined,
+          denchCloudApiKey: opts.denchCloudApiKey as string | undefined,
+          denchCloudModel: opts.denchCloudModel as string | undefined,
+          denchGatewayUrl: opts.denchGatewayUrl as string | undefined,
           noOpen: Boolean(opts.open === false),
           json: Boolean(opts.json),
         });

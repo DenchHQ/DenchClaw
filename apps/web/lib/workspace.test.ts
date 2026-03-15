@@ -957,6 +957,46 @@ describe("workspace utilities", () => {
     });
   });
 
+  describe("resolveFilesystemPath", () => {
+    it("resolves absolute paths outside the workspace without re-rooting them", async () => {
+      process.env.OPENCLAW_WORKSPACE = WS_DIR;
+      const { resolveFilesystemPath, mockExists } = await importWorkspace();
+      mockExists.mockImplementation((p) => [WS_DIR, "/tmp/note.md"].includes(String(p)));
+
+      expect(resolveFilesystemPath("/tmp/note.md")).toEqual({
+        absolutePath: "/tmp/note.md",
+        kind: "absolute",
+        withinWorkspace: false,
+        workspaceRelativePath: null,
+      });
+    });
+
+    it("expands home-relative paths before resolving them", async () => {
+      process.env.OPENCLAW_WORKSPACE = WS_DIR;
+      const { resolveFilesystemPath, mockExists } = await importWorkspace();
+      const homePath = "/home/testuser/notes/today.md";
+      mockExists.mockImplementation((p) => [WS_DIR, homePath].includes(String(p)));
+
+      expect(resolveFilesystemPath("~/notes/today.md")).toEqual({
+        absolutePath: homePath,
+        kind: "homeRelative",
+        withinWorkspace: false,
+        workspaceRelativePath: null,
+      });
+    });
+
+    it("only treats protected files as system files when they resolve inside the workspace", async () => {
+      process.env.OPENCLAW_WORKSPACE = WS_DIR;
+      const { resolveFilesystemPath, isProtectedSystemPath, mockExists } = await importWorkspace();
+      const workspaceSystemFile = join(WS_DIR, ".object.yaml");
+      const externalSystemFile = "/tmp/.object.yaml";
+      mockExists.mockImplementation((p) => [WS_DIR, workspaceSystemFile, externalSystemFile].includes(String(p)));
+
+      expect(isProtectedSystemPath(resolveFilesystemPath(workspaceSystemFile))).toBe(true);
+      expect(isProtectedSystemPath(resolveFilesystemPath(externalSystemFile))).toBe(false);
+    });
+  });
+
   // ─── isSystemFile ────────────────────────────────────────────────
 
   describe("isSystemFile", () => {

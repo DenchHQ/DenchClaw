@@ -1,0 +1,8 @@
+{
+  "name": "@denchclaw/dench-ai-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

@@ -1,6 +1,6 @@
 import { cpSync, existsSync, statSync } from "node:fs";
 import { dirname, basename, extname } from "node:path";
-import { safeResolvePath, safeResolveNewPath } from "@/lib/workspace";
+import { resolveFilesystemPath, isProtectedSystemPath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,36 +28,50 @@ export async function POST(req: Request) {
     );
   }
 
-  const srcAbs = safeResolvePath(relPath);
-  if (!srcAbs) {
+  const sourceTarget = resolveFilesystemPath(relPath);
+  if (isProtectedSystemPath(sourceTarget)) {
+    return Response.json(
+      { error: "Cannot duplicate system file" },
+      { status: 403 },
+    );
+  }
+
+  if (!sourceTarget) {
     return Response.json(
       { error: "Source not found or path traversal rejected" },
       { status: 404 },
     );
   }
 
-  let destRelPath: string;
+  let destinationInputPath: string;
   if (destinationPath && typeof destinationPath === "string") {
-    destRelPath = destinationPath;
+    destinationInputPath = destinationPath;
   } else {
     // Auto-generate "name copy.ext" or "name copy" for folders
-    const name = basename(relPath);
-    const dir = dirname(relPath);
+    const name = basename(sourceTarget.absolutePath);
+    const dir = dirname(sourceTarget.absolutePath);
     const ext = extname(name);
     const stem = ext ? name.slice(0, -ext.length) : name;
     const copyName = ext ? `${stem} copy${ext}` : `${stem} copy`;
-    destRelPath = dir === "." ? copyName : `${dir}/${copyName}`;
+    destinationInputPath = dir === "." ? copyName : `${dir}/${copyName}`;
   }
 
-  const destAbs = safeResolveNewPath(destRelPath);
-  if (!destAbs) {
+  const destinationTarget = resolveFilesystemPath(destinationInputPath, { allowMissing: true });
+  if (!destinationTarget) {
     return Response.json(
       { error: "Invalid destination path" },
       { status: 400 },
     );
   }
 
-  if (existsSync(destAbs)) {
+  if (isProtectedSystemPath(destinationTarget)) {
+    return Response.json(
+      { error: "Cannot duplicate to a protected system path" },
+      { status: 403 },
+    );
+  }
+
+  if (existsSync(destinationTarget.absolutePath)) {
     return Response.json(
       { error: "Destination already exists" },
       { status: 409 },
@@ -65,9 +79,12 @@ export async function POST(req: Request) {
   }
 
   try {
-    const isDir = statSync(srcAbs).isDirectory();
-    cpSync(srcAbs, destAbs, { recursive: isDir });
-    return Response.json({ ok: true, sourcePath: relPath, newPath: destRelPath });
+    const isDir = statSync(sourceTarget.absolutePath).isDirectory();
+    cpSync(sourceTarget.absolutePath, destinationTarget.absolutePath, { recursive: isDir });
+    const newPath = destinationTarget.workspaceRelativePath != null
+      ? destinationTarget.workspaceRelativePath
+      : destinationTarget.absolutePath;
+    return Response.json({ ok: true, sourcePath: relPath, newPath });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "Copy failed" },

@@ -1,6 +1,6 @@
 import { renameSync, existsSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
-import { safeResolvePath, isSystemFile } from "@/lib/workspace";
+import { resolveFilesystemPath, isProtectedSystemPath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,23 +28,23 @@ export async function POST(req: Request) {
     );
   }
 
-  if (isSystemFile(sourcePath)) {
+  const sourceTarget = resolveFilesystemPath(sourcePath);
+  if (isProtectedSystemPath(sourceTarget)) {
     return Response.json(
       { error: "Cannot move system file" },
       { status: 403 },
     );
   }
 
-  const srcAbs = safeResolvePath(sourcePath);
-  if (!srcAbs) {
+  if (!sourceTarget) {
     return Response.json(
       { error: "Source not found or path traversal rejected" },
       { status: 404 },
     );
   }
 
-  const destDirAbs = safeResolvePath(destinationDir);
-  if (!destDirAbs) {
+  const destinationDirTarget = resolveFilesystemPath(destinationDir);
+  if (!destinationDirTarget) {
     return Response.json(
       { error: "Destination not found or path traversal rejected" },
       { status: 404 },
@@ -52,7 +52,7 @@ export async function POST(req: Request) {
   }
 
   // Destination must be a directory
-  if (!statSync(destDirAbs).isDirectory()) {
+  if (!statSync(destinationDirTarget.absolutePath).isDirectory()) {
     return Response.json(
       { error: "Destination is not a directory" },
       { status: 400 },
@@ -60,16 +60,31 @@ export async function POST(req: Request) {
   }
 
   // Prevent moving a folder into itself or its children
-  const srcAbsNorm = srcAbs + "/";
-  if (destDirAbs.startsWith(srcAbsNorm) || destDirAbs === srcAbs) {
+  const srcAbsNorm = `${sourceTarget.absolutePath}/`;
+  if (destinationDirTarget.absolutePath.startsWith(srcAbsNorm) || destinationDirTarget.absolutePath === sourceTarget.absolutePath) {
     return Response.json(
       { error: "Cannot move a folder into itself" },
       { status: 400 },
     );
   }
 
-  const itemName = basename(srcAbs);
-  const destAbs = join(destDirAbs, itemName);
+  const itemName = basename(sourceTarget.absolutePath);
+  const destAbs = join(destinationDirTarget.absolutePath, itemName);
+  const destinationTarget = resolveFilesystemPath(destAbs, { allowMissing: true });
+
+  if (!destinationTarget) {
+    return Response.json(
+      { error: "Invalid destination path" },
+      { status: 400 },
+    );
+  }
+
+  if (isProtectedSystemPath(destinationTarget)) {
+    return Response.json(
+      { error: "Cannot move a file to a protected system path" },
+      { status: 403 },
+    );
+  }
 
   if (existsSync(destAbs)) {
     return Response.json(
@@ -78,12 +93,12 @@ export async function POST(req: Request) {
     );
   }
 
-  // Build new relative path
-  const newRelPath = destinationDir === "." ? itemName : `${destinationDir}/${itemName}`;
-
   try {
-    renameSync(srcAbs, destAbs);
-    return Response.json({ ok: true, oldPath: sourcePath, newPath: newRelPath });
+    renameSync(sourceTarget.absolutePath, destinationTarget.absolutePath);
+    const newPath = destinationTarget.workspaceRelativePath != null
+      ? destinationTarget.workspaceRelativePath
+      : destinationTarget.absolutePath;
+    return Response.json({ ok: true, oldPath: sourcePath, newPath });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "Move failed" },

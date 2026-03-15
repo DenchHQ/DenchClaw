@@ -1,6 +1,6 @@
 import { mkdirSync, existsSync } from "node:fs";
 import { resolve, normalize } from "node:path";
-import { safeResolveNewPath } from "@/lib/workspace";
+import { resolveFilesystemPath, isProtectedSystemPath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,29 +30,25 @@ export async function POST(req: Request) {
     );
   }
 
-  let absPath: string | null;
+  const targetPath = useAbsolute && !rawPath.startsWith("/") && !rawPath.startsWith("~/")
+    ? resolveFilesystemPath(resolve(normalize(rawPath)), { allowMissing: true })
+    : resolveFilesystemPath(rawPath, { allowMissing: true });
 
-  if (useAbsolute) {
-    const normalized = normalize(rawPath);
-    if (normalized.includes("/../") || normalized.includes("/..")) {
-      return Response.json(
-        { error: "Path traversal rejected" },
-        { status: 400 },
-      );
-    }
-    absPath = resolve(normalized);
-  } else {
-    absPath = safeResolveNewPath(rawPath);
-  }
-
-  if (!absPath) {
+  if (!targetPath) {
     return Response.json(
       { error: "Invalid path or path traversal rejected" },
       { status: 400 },
     );
   }
 
-  if (existsSync(absPath)) {
+  if (isProtectedSystemPath(targetPath)) {
+    return Response.json(
+      { error: "Cannot create a protected system path" },
+      { status: 403 },
+    );
+  }
+
+  if (existsSync(targetPath.absolutePath)) {
     return Response.json(
       { error: "Directory already exists" },
       { status: 409 },
@@ -60,8 +56,13 @@ export async function POST(req: Request) {
   }
 
   try {
-    mkdirSync(absPath, { recursive: true });
-    return Response.json({ ok: true, path: absPath });
+    mkdirSync(targetPath.absolutePath, { recursive: true });
+    return Response.json({
+      ok: true,
+      path: targetPath.workspaceRelativePath != null
+        ? targetPath.workspaceRelativePath
+        : targetPath.absolutePath,
+    });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "mkdir failed" },

@@ -490,6 +490,25 @@ describe("MonacoCodeEditor save flow", () => {
 		});
 	});
 
+	it("preserves absolute browse-mode paths when saving code files", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+		global.fetch = fetchMock;
+
+		render(<MonacoCodeEditor content="original" filename="app.ts" filePath="/tmp/app.ts" />);
+		simulateContentChange("browse mode content");
+
+		const btn = screen.getByRole("button", { name: /save/i });
+		await act(async () => {
+			btn.click();
+		});
+
+		expect(fetchMock).toHaveBeenCalledWith("/api/workspace/file", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ path: "/tmp/app.ts", content: "browse mode content" }),
+		});
+	});
+
 	it("shows 'Saved' indicator after successful save", async () => {
 		global.fetch = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
 

@@ -1,6 +1,6 @@
 import { renameSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { safeResolvePath, safeResolveNewPath, isSystemFile } from "@/lib/workspace";
+import { resolveFilesystemPath, isProtectedSystemPath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,7 +28,8 @@ export async function POST(req: Request) {
     );
   }
 
-  if (isSystemFile(relPath)) {
+  const sourcePath = resolveFilesystemPath(relPath);
+  if (isProtectedSystemPath(sourcePath)) {
     return Response.json(
       { error: "Cannot rename system file" },
       { status: 403 },
@@ -43,25 +44,28 @@ export async function POST(req: Request) {
     );
   }
 
-  const absPath = safeResolvePath(relPath);
-  if (!absPath) {
+  if (!sourcePath) {
     return Response.json(
       { error: "Source not found or path traversal rejected" },
       { status: 404 },
     );
   }
 
-  const parentDir = dirname(absPath);
+  const parentDir = dirname(sourcePath.absolutePath);
   const newAbsPath = join(parentDir, newName);
+  const destinationPath = resolveFilesystemPath(newAbsPath, { allowMissing: true });
 
-  // Ensure the new path stays within workspace
-  const parentRel = dirname(relPath);
-  const newRelPath = parentRel === "." ? newName : `${parentRel}/${newName}`;
-  const validated = safeResolveNewPath(newRelPath);
-  if (!validated) {
+  if (!destinationPath) {
     return Response.json(
       { error: "Invalid destination path" },
       { status: 400 },
+    );
+  }
+
+  if (isProtectedSystemPath(destinationPath)) {
+    return Response.json(
+      { error: "Cannot rename to a protected system file" },
+      { status: 403 },
     );
   }
 
@@ -73,8 +77,11 @@ export async function POST(req: Request) {
   }
 
   try {
-    renameSync(absPath, newAbsPath);
-    return Response.json({ ok: true, oldPath: relPath, newPath: newRelPath });
+    renameSync(sourcePath.absolutePath, destinationPath.absolutePath);
+    const newPath = destinationPath.workspaceRelativePath != null
+      ? destinationPath.workspaceRelativePath
+      : destinationPath.absolutePath;
+    return Response.json({ ok: true, oldPath: relPath, newPath });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "Rename failed" },

@@ -295,6 +295,30 @@ describe("RichDocumentEditor save flows", () => {
 		expect(screen.getByText("Saved")).toBeInTheDocument();
 	});
 
+	it("preserves absolute browse-mode paths when saving TXT files", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } }),
+		);
+		global.fetch = fetchMock;
+		const user = userEvent.setup();
+
+		render(
+			<RichDocumentEditor
+				mode="txt"
+				initialHtml="<p>hello</p>"
+				filePath="/tmp/today.txt"
+			/>,
+		);
+		markDirty();
+		await user.click(screen.getByRole("button", { name: "Save" }));
+
+		expect(fetchMock).toHaveBeenCalledWith("/api/workspace/file", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ path: "/tmp/today.txt", content: "Updated plain text" }),
+		});
+	});
+
 	it("saves DOCX via html-to-docx and /api/workspace/write-binary", async () => {
 		const fetchMock = vi.fn().mockResolvedValue(
 			new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } }),

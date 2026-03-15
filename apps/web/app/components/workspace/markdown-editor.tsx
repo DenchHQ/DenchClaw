@@ -18,6 +18,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { ReportBlockNode, preprocessReportBlocks, postprocessReportBlocks } from "./report-block-node";
 import { createSlashCommand, createWorkspaceMention, createFileMention, type TreeNode, type MentionSearchFn } from "./slash-command";
 import { ToolbarGroup, ToolbarDivider, ToolbarButton, BubbleButton } from "./editor-toolbar-primitives";
+import { fileWriteUrl } from "@/lib/workspace-paths";
 import { isWorkspaceLink } from "@/lib/workspace-links";
 
 // --- Types ---
@@ -311,11 +312,7 @@ export function MarkdownEditor({
       // Prepend preserved frontmatter so it isn't lost on save
       const finalContent = frontmatterRef.current + bodyContent;
 
-      // Virtual paths (~skills/*) use the virtual-file API
-      const saveEndpoint = filePath.startsWith("~")
-        ? "/api/workspace/virtual-file"
-        : "/api/workspace/file";
-      const res = await fetch(saveEndpoint, {
+      const res = await fetch(fileWriteUrl(filePath), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: filePath, content: finalContent }),

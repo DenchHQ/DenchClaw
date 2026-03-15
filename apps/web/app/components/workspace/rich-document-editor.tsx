@@ -21,6 +21,7 @@ import Superscript from "@tiptap/extension-superscript";
 import Subscript from "@tiptap/extension-subscript";
 import CharacterCount from "@tiptap/extension-character-count";
 import { useState, useCallback, useEffect, useRef } from "react";
+import { fileWriteUrl } from "@/lib/workspace-paths";
 
 import {
   ToolbarGroup,
@@ -195,7 +196,7 @@ export function RichDocumentEditor({
     try {
       if (isTxt) {
         const text = editor.getText();
-        const res = await fetch("/api/workspace/file", {
+        const res = await fetch(fileWriteUrl(filePath), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: filePath, content: text }),

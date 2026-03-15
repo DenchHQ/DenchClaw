@@ -16,6 +16,7 @@ import {
 } from "@dnd-kit/core";
 import { ContextMenu, type ContextMenuAction, type ContextMenuTarget } from "./context-menu";
 import { InlineRename, RENAME_SHAKE_STYLE } from "./inline-rename";
+import { classifyWorkspacePath, fileWriteUrl, isVirtualPath } from "@/lib/workspace-paths";
 
 // --- Types ---
 
@@ -44,9 +45,9 @@ export type TreeNode = {
 /** Folder names reserved for virtual sections -- cannot be created/renamed to. */
 const RESERVED_FOLDER_NAMES = new Set(["Chats", "Skills", "Memories"]);
 
-/** Check if a node (or any of its ancestors) is virtual. Paths starting with ~ are always virtual. */
+/** Check if a node (or any of its ancestors) is virtual. */
 function isVirtualNode(node: TreeNode): boolean {
-  return !!node.virtual || node.path.startsWith("~");
+  return !!node.virtual || isVirtualPath(node.path);
 }
 
 type FileManagerTreeProps = {
@@ -82,10 +83,23 @@ const ROOT_ONLY_SYSTEM_PATTERNS = [
   /^workspace_context\.yaml$/,
 ];
 
-function isSystemFile(path: string): boolean {
-  const base = path.split("/").pop() ?? "";
+function toWorkspaceRelativePath(path: string, workspaceRoot?: string | null): string | null {
+  const kind = classifyWorkspacePath(path);
+  if (kind === "virtual" || kind === "homeRelative") {return null;}
+  if (kind === "workspaceRelative") {return path;}
+  if (!workspaceRoot) {return null;}
+  if (path !== workspaceRoot && !path.startsWith(`${workspaceRoot}/`)) {
+    return null;
+  }
+  return path === workspaceRoot ? "" : path.slice(workspaceRoot.length + 1);
+}
+
+function isSystemFile(path: string, workspaceRoot?: string | null): boolean {
+  const relativePath = toWorkspaceRelativePath(path, workspaceRoot);
+  if (relativePath == null) {return false;}
+  const base = relativePath.split("/").pop() ?? "";
   if (ALWAYS_SYSTEM_PATTERNS.some((p) => p.test(base))) {return true;}
-  const isRoot = !path.includes("/");
+  const isRoot = relativePath !== "" && !relativePath.includes("/");
   return isRoot && ROOT_ONLY_SYSTEM_PATTERNS.some((p) => p.test(base));
 }
 
@@ -302,7 +316,7 @@ async function apiMkdir(path: string) {
 }
 
 async function apiCreateFile(path: string, content: string = "") {
-  const res = await fetch("/api/workspace/file", {
+  const res = await fetch(fileWriteUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, content }),
@@ -461,7 +475,7 @@ function DraggableNode({
   const isActive = activePath === node.path;
   const isSelected = selectedPath === node.path;
   const isRenaming = renamingPath === node.path;
-  const isSysFile = isSystemFile(node.path);
+  const isSysFile = isSystemFile(node.path, workspaceRoot);
   const isVirtual = isVirtualNode(node);
   const isProtected = isSysFile || isVirtual || isWorkspaceRoot;
   const isDragOver = dragOverPath === node.path && isExpandable;
@@ -963,7 +977,7 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
 
   // Context menu handlers
   const handleContextMenu = useCallback((e: React.MouseEvent, node: TreeNode) => {
-    const isSys = isSystemFile(node.path) || isVirtualNode(node);
+    const isSys = isSystemFile(node.path, workspaceRoot) || isVirtualNode(node);
     const isFolder = node.type === "folder" || node.type === "object";
     setCtxMenu({
       x: e.clientX,
@@ -975,7 +989,7 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
         isSystem: isSys,
       },
     });
-  }, []);
+  }, [workspaceRoot]);
 
   const handleEmptyContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -1151,7 +1165,7 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
         case "Enter": {
           e.preventDefault();
           if (curNode) {
-            const curProtected = isSystemFile(curNode.path) || isVirtualNode(curNode);
+            const curProtected = isSystemFile(curNode.path, workspaceRoot) || isVirtualNode(curNode);
             if (e.shiftKey || curProtected) {
               onSelect(curNode);
             } else {
@@ -1162,14 +1176,14 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
         }
         case "F2": {
           e.preventDefault();
-          if (curNode && !isSystemFile(curNode.path) && !isVirtualNode(curNode)) {
+          if (curNode && !isSystemFile(curNode.path, workspaceRoot) && !isVirtualNode(curNode)) {
             setRenamingPath(curNode.path);
           }
           break;
         }
         case "Backspace":
         case "Delete": {
-          if (curNode && !isSystemFile(curNode.path) && !isVirtualNode(curNode)) {
+          if (curNode && !isSystemFile(curNode.path, workspaceRoot) && !isVirtualNode(curNode)) {
             e.preventDefault();
             setConfirmDelete(curNode.path);
           }
@@ -1181,7 +1195,7 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
             if (e.key === "c" && curNode) {
               e.preventDefault();
               void navigator.clipboard.writeText(curNode.path);
-            } else if (e.key === "d" && curNode && !isSystemFile(curNode.path)) {
+            } else if (e.key === "d" && curNode && !isSystemFile(curNode.path, workspaceRoot)) {
               e.preventDefault();
               void apiDuplicate(curNode.path).then(() => onRefresh());
             } else if (e.key === "n") {
@@ -1202,7 +1216,7 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
         }
       }
     },
-    [tree, expandedPaths, selectedPath, renamingPath, onSelect, onRefresh],
+    [tree, expandedPaths, selectedPath, renamingPath, onSelect, onRefresh, workspaceRoot],
   );
 
   if (tree.length === 0) {

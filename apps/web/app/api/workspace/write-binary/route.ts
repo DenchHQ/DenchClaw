@@ -1,6 +1,6 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { safeResolveNewPath, isSystemFile } from "@/lib/workspace";
+import { resolveFilesystemPath, isProtectedSystemPath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,12 +28,12 @@ export async function POST(req: Request) {
 		return Response.json({ error: "Missing 'file' field (Blob)" }, { status: 400 });
 	}
 
-	if (isSystemFile(relPath)) {
+	const targetPath = resolveFilesystemPath(relPath, { allowMissing: true });
+	if (isProtectedSystemPath(targetPath)) {
 		return Response.json({ error: "Cannot modify system file" }, { status: 403 });
 	}
 
-	const absPath = safeResolveNewPath(relPath);
-	if (!absPath) {
+	if (!targetPath) {
 		return Response.json(
 			{ error: "Invalid path or path traversal rejected" },
 			{ status: 400 },
@@ -42,8 +42,8 @@ export async function POST(req: Request) {
 
 	try {
 		const buffer = Buffer.from(await file.arrayBuffer());
-		mkdirSync(dirname(absPath), { recursive: true });
-		writeFileSync(absPath, buffer);
+		mkdirSync(dirname(targetPath.absolutePath), { recursive: true });
+		writeFileSync(targetPath.absolutePath, buffer);
 		return Response.json({ ok: true, path: relPath });
 	} catch (err) {
 		return Response.json(

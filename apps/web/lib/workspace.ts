@@ -2,10 +2,15 @@ import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 
 import { access, readdir as readdirAsync } from "node:fs/promises";
 import { execSync, exec } from "node:child_process";
 import { promisify } from "node:util";
-import { join, resolve, normalize, relative } from "node:path";
+import { join, resolve, normalize, relative, isAbsolute as isNodeAbsolute } from "node:path";
 import { homedir } from "node:os";
 import YAML from "yaml";
 import { normalizeFilterGroup, type SavedView, type ViewTypeSettings } from "./object-filters";
+import {
+  classifyWorkspacePath,
+  isHomeRelativePath,
+  type WorkspacePathKind,
+} from "./workspace-paths";
 
 const execAsync = promisify(exec);
 
@@ -1148,6 +1153,66 @@ export async function duckdbQueryOnFileAsync<T = Record<string, unknown>>(
   }
 }
 
+export type ResolvedFilesystemPath = {
+  absolutePath: string;
+  kind: WorkspacePathKind;
+  withinWorkspace: boolean;
+  workspaceRelativePath: string | null;
+};
+
+function toPortableRelativePath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+function isPathWithinRoot(root: string, absolutePath: string): boolean {
+  const relPath = relative(resolve(root), resolve(absolutePath));
+  return relPath === "" || (!relPath.startsWith("..") && !isNodeAbsolute(relPath));
+}
+
+function expandHomeRelativePath(inputPath: string): string {
+  if (!isHomeRelativePath(inputPath)) {return inputPath;}
+  return join(homedir(), inputPath.slice(2));
+}
+
+/**
+ * Resolve a local filesystem path that may be workspace-relative, absolute,
+ * or home-relative. Virtual `~skills/...` style paths are rejected here.
+ */
+export function resolveFilesystemPath(
+  inputPath: string,
+  options: { allowMissing?: boolean } = {},
+): ResolvedFilesystemPath | null {
+  const kind = classifyWorkspacePath(inputPath);
+  if (kind === "virtual") {return null;}
+
+  const workspaceRoot = resolveWorkspaceRoot();
+  let absolutePath: string;
+
+  if (kind === "workspaceRelative") {
+    if (!workspaceRoot) {return null;}
+    absolutePath = resolve(workspaceRoot, normalize(inputPath));
+    if (!isPathWithinRoot(workspaceRoot, absolutePath)) {return null;}
+  } else if (kind === "homeRelative") {
+    absolutePath = resolve(normalize(expandHomeRelativePath(inputPath)));
+  } else {
+    absolutePath = resolve(normalize(inputPath));
+  }
+
+  if (!options.allowMissing && !existsSync(absolutePath)) {return null;}
+
+  const withinWorkspace = !!workspaceRoot && isPathWithinRoot(workspaceRoot, absolutePath);
+  const workspaceRelativePath = withinWorkspace && workspaceRoot
+    ? toPortableRelativePath(relative(resolve(workspaceRoot), absolutePath))
+    : null;
+
+  return {
+    absolutePath,
+    kind,
+    withinWorkspace,
+    workspaceRelativePath,
+  };
+}
+
 /**
  * Validate and resolve a path within the workspace.
  * Prevents path traversal by ensuring the resolved path stays within root.
@@ -1156,20 +1221,9 @@ export async function duckdbQueryOnFileAsync<T = Record<string, unknown>>(
 export function safeResolvePath(
   relativePath: string,
 ): string | null {
-  const root = resolveWorkspaceRoot();
-  if (!root) {return null;}
-
-  // Reject obvious traversal attempts
-  const normalized = normalize(relativePath);
-  if (normalized.startsWith("..") || normalized.includes("/../")) {return null;}
-
-  const absolute = resolve(root, normalized);
-
-  // Ensure the resolved path is still within the workspace root
-  if (!absolute.startsWith(resolve(root))) {return null;}
-  if (!existsSync(absolute)) {return null;}
-
-  return absolute;
+  const resolvedPath = resolveFilesystemPath(relativePath);
+  if (!resolvedPath || resolvedPath.kind !== "workspaceRelative") {return null;}
+  return resolvedPath.absolutePath;
 }
 
 /**
@@ -1427,22 +1481,24 @@ export function isSystemFile(relativePath: string): boolean {
   return isRoot && ROOT_ONLY_SYSTEM_PATTERNS.some((p) => p.test(base));
 }
 
+export function isProtectedSystemPath(
+  resolvedPath: ResolvedFilesystemPath | null,
+): boolean {
+  if (!resolvedPath?.withinWorkspace || resolvedPath.workspaceRelativePath == null) {
+    return false;
+  }
+  return isSystemFile(resolvedPath.workspaceRelativePath);
+}
+
 /**
  * Like safeResolvePath but does NOT require the target to exist on disk.
  * Useful for mkdir / create / rename-target validation.
  * Still prevents path traversal.
  */
 export function safeResolveNewPath(relativePath: string): string | null {
-  const root = resolveWorkspaceRoot();
-  if (!root) {return null;}
-
-  const normalized = normalize(relativePath);
-  if (normalized.startsWith("..") || normalized.includes("/../")) {return null;}
-
-  const absolute = resolve(root, normalized);
-  if (!absolute.startsWith(resolve(root))) {return null;}
-
-  return absolute;
+  const resolvedPath = resolveFilesystemPath(relativePath, { allowMissing: true });
+  if (!resolvedPath || resolvedPath.kind !== "workspaceRelative") {return null;}
+  return resolvedPath.absolutePath;
 }
 
 /**

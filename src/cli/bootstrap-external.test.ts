@@ -108,6 +108,30 @@ describe("bootstrap-external diagnostics", () => {
     }
   });
 
+  it("passes agent-auth for Dench Cloud when apiKey is stored on the custom provider config", () => {
+    const dir = createTempStateDir();
+    writeConfig(dir, {
+      agents: { defaults: { model: { primary: "dench-cloud/anthropic.claude-opus-4-6-v1" } } },
+      models: {
+        providers: {
+          "dench-cloud": {
+            baseUrl: "https://gateway.merseoriginals.com/v1",
+            apiKey: "dench_cfg_key_123",
+          },
+        },
+      },
+    });
+
+    try {
+      const diagnostics = buildBootstrapDiagnostics(baseParams(dir));
+      const auth = getCheck(diagnostics, "agent-auth");
+      expect(auth.status).toBe("pass");
+      expect(auth.detail).toContain("Custom provider credentials");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("fails agent-auth when key exists for wrong provider (catches provider mismatch)", () => {
     const dir = createTempStateDir();
     writeConfig(dir, {
@@ -267,6 +291,22 @@ describe("checkAgentAuth", () => {
     expect(result.detail).toContain("auth-profiles.json");
   });
 
+  it("returns ok when a custom provider apiKey exists in openclaw.json", () => {
+    writeConfig(stateDir, {
+      models: {
+        providers: {
+          "dench-cloud": {
+            apiKey: "dench_cfg_key_123",
+          },
+        },
+      },
+    });
+
+    const result = checkAgentAuth(stateDir, "dench-cloud");
+    expect(result.ok).toBe(true);
+    expect(result.detail).toContain("Custom provider credentials");
+  });
+
   it("returns not ok when key exists for a different provider", () => {
     writeAuthProfiles(stateDir, {
       profiles: {
@@ -364,6 +404,19 @@ describe("readExistingGatewayPort", () => {
   it("parses string port values (handles config.set serialization)", () => {
     writeConfig(stateDir, { gateway: { port: "19001" } });
     expect(readExistingGatewayPort(stateDir)).toBe(19001);
+  });
+
+  it("parses JSON5 config files with comments and trailing commas", () => {
+    writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      `{
+        // json5 comment
+        gateway: {
+          port: 19007,
+        },
+      }`,
+    );
+    expect(readExistingGatewayPort(stateDir)).toBe(19007);
   });
 
   it("rejects zero and negative ports (invalid port values)", () => {

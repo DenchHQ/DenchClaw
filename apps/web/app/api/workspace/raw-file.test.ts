@@ -8,10 +8,9 @@ vi.mock("node:fs", () => ({
 }));
 
 vi.mock("@/lib/workspace", () => ({
-  safeResolvePath: vi.fn(),
-  safeResolveNewPath: vi.fn(),
+  resolveFilesystemPath: vi.fn(),
   resolveWorkspaceRoot: vi.fn(() => "/ws"),
-  isSystemFile: vi.fn(() => false),
+  isProtectedSystemPath: vi.fn(() => false),
 }));
 
 describe("POST /api/workspace/raw-file", () => {
@@ -24,10 +23,9 @@ describe("POST /api/workspace/raw-file", () => {
       mkdirSync: vi.fn(),
     }));
     vi.mock("@/lib/workspace", () => ({
-      safeResolvePath: vi.fn(),
-      safeResolveNewPath: vi.fn(),
+      resolveFilesystemPath: vi.fn(),
       resolveWorkspaceRoot: vi.fn(() => "/ws"),
-      isSystemFile: vi.fn(() => false),
+      isProtectedSystemPath: vi.fn(() => false),
     }));
   });
 
@@ -46,8 +44,14 @@ describe("POST /api/workspace/raw-file", () => {
   });
 
   it("returns 403 when path is a system file (protects workspace.duckdb, etc.)", async () => {
-    const { isSystemFile } = await import("@/lib/workspace");
-    vi.mocked(isSystemFile).mockReturnValueOnce(true);
+    const { resolveFilesystemPath, isProtectedSystemPath } = await import("@/lib/workspace");
+    vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
+      absolutePath: "/ws/workspace.duckdb",
+      kind: "workspaceRelative",
+      withinWorkspace: true,
+      workspaceRelativePath: "workspace.duckdb",
+    });
+    vi.mocked(isProtectedSystemPath).mockReturnValueOnce(true);
 
     const { POST } = await import("./raw-file/route.js");
     const req = new Request(
@@ -60,9 +64,9 @@ describe("POST /api/workspace/raw-file", () => {
     expect(json.error).toContain("system file");
   });
 
-  it("returns 400 when safeResolveNewPath rejects the path (path traversal attack)", async () => {
-    const { safeResolveNewPath } = await import("@/lib/workspace");
-    vi.mocked(safeResolveNewPath).mockReturnValueOnce(null);
+  it("returns 400 when path resolution rejects the path (path traversal attack)", async () => {
+    const { resolveFilesystemPath } = await import("@/lib/workspace");
+    vi.mocked(resolveFilesystemPath).mockReturnValueOnce(null);
 
     const { POST } = await import("./raw-file/route.js");
     const req = new Request(
@@ -76,8 +80,13 @@ describe("POST /api/workspace/raw-file", () => {
   });
 
   it("writes binary data to the resolved path and creates parent dirs", async () => {
-    const { safeResolveNewPath } = await import("@/lib/workspace");
-    vi.mocked(safeResolveNewPath).mockReturnValueOnce("/ws/data/report.xlsx");
+    const { resolveFilesystemPath } = await import("@/lib/workspace");
+    vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
+      absolutePath: "/ws/data/report.xlsx",
+      kind: "workspaceRelative",
+      withinWorkspace: true,
+      workspaceRelativePath: "data/report.xlsx",
+    });
 
     const { writeFileSync: mockWrite, mkdirSync: mockMkdir } = await import("node:fs");
 
@@ -101,8 +110,13 @@ describe("POST /api/workspace/raw-file", () => {
   });
 
   it("returns 500 when writeFileSync throws (disk full, permission denied)", async () => {
-    const { safeResolveNewPath } = await import("@/lib/workspace");
-    vi.mocked(safeResolveNewPath).mockReturnValueOnce("/ws/data.xlsx");
+    const { resolveFilesystemPath } = await import("@/lib/workspace");
+    vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
+      absolutePath: "/ws/data.xlsx",
+      kind: "workspaceRelative",
+      withinWorkspace: true,
+      workspaceRelativePath: "data.xlsx",
+    });
 
     const { writeFileSync: mockWrite } = await import("node:fs");
     vi.mocked(mockWrite).mockImplementationOnce(() => {
@@ -121,8 +135,13 @@ describe("POST /api/workspace/raw-file", () => {
   });
 
   it("preserves binary content exactly as received (no encoding corruption)", async () => {
-    const { safeResolveNewPath } = await import("@/lib/workspace");
-    vi.mocked(safeResolveNewPath).mockReturnValueOnce("/ws/file.xlsx");
+    const { resolveFilesystemPath } = await import("@/lib/workspace");
+    vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
+      absolutePath: "/ws/file.xlsx",
+      kind: "workspaceRelative",
+      withinWorkspace: true,
+      workspaceRelativePath: "file.xlsx",
+    });
 
     const { writeFileSync: mockWrite } = await import("node:fs");
     vi.mocked(mockWrite).mockClear();
@@ -143,21 +162,25 @@ describe("POST /api/workspace/raw-file", () => {
     expect(writtenBuffer[4]).toBe(0x01);
   });
 
-  it("calls isSystemFile before safeResolveNewPath (rejects early, prevents resolve overhead)", async () => {
-    const { isSystemFile, safeResolveNewPath } = await import("@/lib/workspace");
-    vi.mocked(isSystemFile).mockClear();
-    vi.mocked(safeResolveNewPath).mockClear();
-    vi.mocked(isSystemFile).mockReturnValueOnce(true);
+  it("writes external absolute .object.yaml files when they are outside the managed workspace", async () => {
+    const { resolveFilesystemPath, isProtectedSystemPath } = await import("@/lib/workspace");
+    vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
+      absolutePath: "/tmp/.object.yaml",
+      kind: "absolute",
+      withinWorkspace: false,
+      workspaceRelativePath: null,
+    });
+    vi.mocked(isProtectedSystemPath).mockReturnValueOnce(false);
+    const { writeFileSync: mockWrite } = await import("node:fs");
 
     const { POST } = await import("./raw-file/route.js");
     const req = new Request(
-      "http://localhost/api/workspace/raw-file?path=workspace.duckdb",
+      "http://localhost/api/workspace/raw-file?path=/tmp/.object.yaml",
       { method: "POST", body: new ArrayBuffer(1) },
     );
-    await POST(req);
-
-    expect(isSystemFile).toHaveBeenCalledWith("workspace.duckdb");
-    expect(safeResolveNewPath).not.toHaveBeenCalled();
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(mockWrite).toHaveBeenCalledWith("/tmp/.object.yaml", expect.any(Buffer));
   });
 });
 
@@ -171,10 +194,9 @@ describe("GET /api/workspace/raw-file", () => {
       mkdirSync: vi.fn(),
     }));
     vi.mock("@/lib/workspace", () => ({
-      safeResolvePath: vi.fn(),
-      safeResolveNewPath: vi.fn(),
+      resolveFilesystemPath: vi.fn(),
       resolveWorkspaceRoot: vi.fn(() => "/ws"),
-      isSystemFile: vi.fn(() => false),
+      isProtectedSystemPath: vi.fn(() => false),
     }));
   });
 
@@ -183,8 +205,13 @@ describe("GET /api/workspace/raw-file", () => {
   });
 
   it("returns DOCX MIME type for .docx files (required for browser/editor interoperability)", async () => {
-    const { safeResolvePath } = await import("@/lib/workspace");
-    vi.mocked(safeResolvePath).mockReturnValueOnce("/ws/docs/spec.docx");
+    const { resolveFilesystemPath } = await import("@/lib/workspace");
+    vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
+      absolutePath: "/ws/docs/spec.docx",
+      kind: "workspaceRelative",
+      withinWorkspace: true,
+      workspaceRelativePath: "docs/spec.docx",
+    });
     const { readFileSync } = await import("node:fs");
     vi.mocked(readFileSync).mockReturnValueOnce(Buffer.from([0x50, 0x4b]));
 
@@ -199,8 +226,13 @@ describe("GET /api/workspace/raw-file", () => {
   });
 
   it("returns text/plain for .txt files (ensures plain-text previews render correctly)", async () => {
-    const { safeResolvePath } = await import("@/lib/workspace");
-    vi.mocked(safeResolvePath).mockReturnValueOnce("/ws/notes/today.txt");
+    const { resolveFilesystemPath } = await import("@/lib/workspace");
+    vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
+      absolutePath: "/ws/notes/today.txt",
+      kind: "workspaceRelative",
+      withinWorkspace: true,
+      workspaceRelativePath: "notes/today.txt",
+    });
     const { readFileSync } = await import("node:fs");
     vi.mocked(readFileSync).mockReturnValueOnce(Buffer.from("hello"));
 
@@ -213,8 +245,13 @@ describe("GET /api/workspace/raw-file", () => {
   });
 
   it("falls back to octet-stream for unknown extensions (prevents incorrect sniffing assumptions)", async () => {
-    const { safeResolvePath } = await import("@/lib/workspace");
-    vi.mocked(safeResolvePath).mockReturnValueOnce("/ws/blob.unknown");
+    const { resolveFilesystemPath } = await import("@/lib/workspace");
+    vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
+      absolutePath: "/ws/blob.unknown",
+      kind: "workspaceRelative",
+      withinWorkspace: true,
+      workspaceRelativePath: "blob.unknown",
+    });
     const { readFileSync } = await import("node:fs");
     vi.mocked(readFileSync).mockReturnValueOnce(Buffer.from([1, 2, 3]));
 
@@ -233,8 +270,8 @@ describe("GET /api/workspace/raw-file", () => {
   });
 
   it("returns 404 when file cannot be resolved (prevents leaking host paths)", async () => {
-    const { safeResolvePath, resolveWorkspaceRoot } = await import("@/lib/workspace");
-    vi.mocked(safeResolvePath).mockReturnValueOnce(null);
+    const { resolveFilesystemPath, resolveWorkspaceRoot } = await import("@/lib/workspace");
+    vi.mocked(resolveFilesystemPath).mockReturnValueOnce(null);
     vi.mocked(resolveWorkspaceRoot).mockReturnValueOnce(null);
 
     const { GET } = await import("./raw-file/route.js");

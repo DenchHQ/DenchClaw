@@ -1,8 +1,18 @@
 import { spawn, type StdioOptions } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { confirm, isCancel, spinner } from "@clack/prompts";
+import { confirm, isCancel, select, spinner, text } from "@clack/prompts";
+import json5 from "json5";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { readTelemetryConfig, markNoticeShown } from "../telemetry/config.js";
@@ -10,6 +20,19 @@ import { track } from "../telemetry/telemetry.js";
 import { stylePromptMessage } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
+import {
+  buildDenchCloudConfigPatch,
+  DEFAULT_DENCH_CLOUD_GATEWAY_URL,
+  fetchDenchCloudCatalog,
+  formatDenchCloudModelHint,
+  normalizeDenchGatewayUrl,
+  readConfiguredDenchCloudSettings,
+  RECOMMENDED_DENCH_CLOUD_MODEL_ID,
+  resolveDenchCloudModel,
+  validateDenchCloudApiKey,
+  type DenchCloudCatalogLoadResult,
+  type DenchCloudCatalogModel,
+} from "./dench-cloud.js";
 import { applyCliProfileEnv } from "./profile.js";
 import {
   DEFAULT_WEB_APP_PORT,
@@ -68,6 +91,10 @@ export type BootstrapOptions = {
   json?: boolean;
   gatewayPort?: string | number;
   webPort?: string | number;
+  denchCloud?: boolean;
+  denchCloudApiKey?: string;
+  denchCloudModel?: string;
+  denchGatewayUrl?: string;
 };
 
 type BootstrapSummary = {
@@ -147,6 +174,26 @@ type GatewayAutoFixResult = {
   finalProbe: { ok: boolean; detail?: string };
   failureSummary?: string;
   logExcerpts: GatewayLogExcerpt[];
+};
+
+type BundledPluginSpec = {
+  pluginId: string;
+  sourceDirName: string;
+  enabled?: boolean;
+  config?: Record<string, string | boolean>;
+};
+
+type BundledPluginSyncResult = {
+  installedPluginIds: string[];
+  migratedLegacyDenchPlugin: boolean;
+};
+
+type DenchCloudBootstrapSelection = {
+  enabled: boolean;
+  apiKey?: string;
+  gatewayUrl?: string;
+  selectedModel?: string;
+  catalog?: DenchCloudCatalogLoadResult;
 };
 
 function resolveCommandForPlatform(command: string): string {
@@ -315,7 +362,7 @@ export function isPersistedPortAcceptable(port: number | undefined): port is num
 export function readExistingGatewayPort(stateDir: string): number | undefined {
   for (const name of ["openclaw.json", "config.json"]) {
     try {
-      const raw = JSON.parse(readFileSync(path.join(stateDir, name), "utf-8")) as {
+      const raw = json5.parse(readFileSync(path.join(stateDir, name), "utf-8")) as {
         gateway?: { port?: unknown };
       };
       const port =
@@ -386,82 +433,218 @@ function resolveGatewayLaunchAgentLabel(profile: string): string {
   return `ai.openclaw.${normalized}`;
 }
 
-async function installBundledPlugins(params: {
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function normalizeFilesystemPath(value: string): string {
+  try {
+    return realpathSync.native(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function readBundledPluginVersion(pluginDir: string): string | undefined {
+  const packageJsonPath = path.join(pluginDir, "package.json");
+  if (!existsSync(packageJsonPath)) {
+    return undefined;
+  }
+  try {
+    const raw = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as {
+      version?: unknown;
+    };
+    return typeof raw.version === "string" && raw.version.trim().length > 0
+      ? raw.version.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readConfiguredPluginAllowlist(stateDir: string): string[] {
+  const raw = readBootstrapConfig(stateDir) as {
+    plugins?: {
+      allow?: unknown;
+    };
+  } | undefined;
+  return Array.isArray(raw?.plugins?.allow)
+    ? raw.plugins.allow.filter((value): value is string => typeof value === "string")
+    : [];
+}
+
+function readConfiguredPluginLoadPaths(stateDir: string): string[] {
+  const raw = readBootstrapConfig(stateDir) as {
+    plugins?: {
+      load?: {
+        paths?: unknown;
+      };
+    };
+  } | undefined;
+  return Array.isArray(raw?.plugins?.load?.paths)
+    ? raw.plugins.load.paths.filter((value): value is string => typeof value === "string")
+    : [];
+}
+
+function isLegacyDenchCloudPluginPath(value: string): boolean {
+  return value.replaceAll("\\", "/").includes("/dench-cloud-provider");
+}
+
+async function setOpenClawConfigJson(params: {
+  openclawCommand: string;
+  profile: string;
+  key: string;
+  value: unknown;
+  errorMessage: string;
+}): Promise<void> {
+  await runOpenClawOrThrow({
+    openclawCommand: params.openclawCommand,
+    args: [
+      "--profile",
+      params.profile,
+      "config",
+      "set",
+      params.key,
+      JSON.stringify(params.value),
+    ],
+    timeoutMs: 30_000,
+    errorMessage: params.errorMessage,
+  });
+}
+
+async function syncBundledPlugins(params: {
   openclawCommand: string;
   profile: string;
   stateDir: string;
-  posthogKey: string;
-}): Promise<boolean> {
+  plugins: BundledPluginSpec[];
+  restartGateway?: boolean;
+}): Promise<BundledPluginSyncResult> {
   try {
-    const pluginSrc = path.join(resolveCliPackageRoot(), "extensions", "posthog-analytics");
-    if (!existsSync(pluginSrc)) return false;
+    const packageRoot = resolveCliPackageRoot();
+    const installedPluginIds: string[] = [];
+    const rawConfig = readBootstrapConfig(params.stateDir) ?? {};
+    const nextConfig = {
+      ...rawConfig,
+    };
+    const pluginsConfig = {
+      ...asRecord(nextConfig.plugins),
+    };
+    const loadConfig = {
+      ...asRecord(pluginsConfig.load),
+    };
+    const installs = {
+      ...asRecord(pluginsConfig.installs),
+    };
+    const entries = {
+      ...asRecord(pluginsConfig.entries),
+    };
+    const currentAllow = readConfiguredPluginAllowlist(params.stateDir);
+    const currentLoadPaths = readConfiguredPluginLoadPaths(params.stateDir);
+    const nextAllow = currentAllow.filter(
+      (value) => value !== "dench-cloud-provider",
+    );
+    const nextLoadPaths = currentLoadPaths.filter(
+      (value) => !isLegacyDenchCloudPluginPath(value),
+    );
+    const legacyPluginDir = path.join(params.stateDir, "extensions", "dench-cloud-provider");
+    const hadLegacyEntry = entries["dench-cloud-provider"] !== undefined;
+    const hadLegacyInstall = installs["dench-cloud-provider"] !== undefined;
+    delete entries["dench-cloud-provider"];
+    delete installs["dench-cloud-provider"];
+    const migratedLegacyDenchPlugin =
+      nextAllow.length !== currentAllow.length ||
+      nextLoadPaths.length !== currentLoadPaths.length ||
+      hadLegacyEntry ||
+      hadLegacyInstall ||
+      existsSync(legacyPluginDir);
 
-    const pluginDest = path.join(params.stateDir, "extensions", "posthog-analytics");
-    mkdirSync(path.dirname(pluginDest), { recursive: true });
-    cpSync(pluginSrc, pluginDest, { recursive: true, force: true });
+    for (const plugin of params.plugins) {
+      const pluginSrc = path.join(packageRoot, "extensions", plugin.sourceDirName);
+      if (!existsSync(pluginSrc)) {
+        continue;
+      }
 
-    await runOpenClawOrThrow({
-      openclawCommand: params.openclawCommand,
-      args: [
-        "--profile", params.profile,
-        "config", "set",
-        "plugins.allow", '["posthog-analytics"]',
-      ],
-      timeoutMs: 30_000,
-      errorMessage: "Failed to set plugins.allow for posthog-analytics.",
-    });
+      const pluginDest = path.join(params.stateDir, "extensions", plugin.sourceDirName);
+      mkdirSync(path.dirname(pluginDest), { recursive: true });
+      cpSync(pluginSrc, pluginDest, { recursive: true, force: true });
+      const normalizedPluginSrc = normalizeFilesystemPath(pluginSrc);
+      const normalizedPluginDest = normalizeFilesystemPath(pluginDest);
+      nextAllow.push(plugin.pluginId);
+      nextLoadPaths.push(normalizedPluginDest);
+      installedPluginIds.push(plugin.pluginId);
 
-    await runOpenClawOrThrow({
-      openclawCommand: params.openclawCommand,
-      args: [
-        "--profile", params.profile,
-        "config", "set",
-        "plugins.load.paths", JSON.stringify([pluginDest]),
-      ],
-      timeoutMs: 30_000,
-      errorMessage: "Failed to set plugins.load.paths for posthog-analytics.",
-    });
+      const existingEntry = {
+        ...asRecord(entries[plugin.pluginId]),
+      };
+      if (plugin.enabled !== undefined) {
+        existingEntry.enabled = plugin.enabled;
+      }
+      if (plugin.config && Object.keys(plugin.config).length > 0) {
+        existingEntry.config = {
+          ...asRecord(existingEntry.config),
+          ...plugin.config,
+        };
+      }
+      if (Object.keys(existingEntry).length > 0) {
+        entries[plugin.pluginId] = existingEntry;
+      }
 
-    if (params.posthogKey) {
-      await runOpenClawOrThrow({
-        openclawCommand: params.openclawCommand,
-        args: [
-          "--profile", params.profile,
-          "config", "set",
-          "plugins.entries.posthog-analytics.enabled", "true",
-        ],
-        timeoutMs: 30_000,
-        errorMessage: "Failed to enable posthog-analytics plugin.",
-      });
-      await runOpenClawOrThrow({
-        openclawCommand: params.openclawCommand,
-        args: [
-          "--profile", params.profile,
-          "config", "set",
-          "plugins.entries.posthog-analytics.config.apiKey", params.posthogKey,
-        ],
-        timeoutMs: 30_000,
-        errorMessage: "Failed to set posthog-analytics API key.",
-      });
+      const installRecord: Record<string, unknown> = {
+        source: "path",
+        sourcePath: normalizedPluginSrc,
+        installPath: normalizedPluginDest,
+        installedAt: new Date().toISOString(),
+      };
+      const version = readBundledPluginVersion(pluginSrc);
+      if (version) {
+        installRecord.version = version;
+      }
+      installs[plugin.pluginId] = installRecord;
     }
 
-    // Restart the gateway so it loads the new/updated plugin.
-    // On first bootstrap the gateway isn't running yet, so this
-    // is a harmless no-op caught by the outer try/catch.
-    try {
-      await runOpenClawOrThrow({
-        openclawCommand: params.openclawCommand,
-        args: ["--profile", params.profile, "gateway", "restart"],
-        timeoutMs: 60_000,
-        errorMessage: "Failed to restart gateway after plugin install.",
-      });
-    } catch {
-      // Gateway may not be running yet (first bootstrap) — ignore.
+    pluginsConfig.allow = uniqueStrings(nextAllow);
+    loadConfig.paths = uniqueStrings(nextLoadPaths);
+    pluginsConfig.load = loadConfig;
+    pluginsConfig.entries = entries;
+    pluginsConfig.installs = installs;
+    nextConfig.plugins = pluginsConfig;
+    writeFileSync(
+      path.join(params.stateDir, "openclaw.json"),
+      `${JSON.stringify(nextConfig, null, 2)}\n`,
+    );
+
+    if (migratedLegacyDenchPlugin) {
+      rmSync(legacyPluginDir, { recursive: true, force: true });
     }
 
-    return true;
+    if (params.restartGateway) {
+      try {
+        await runOpenClawOrThrow({
+          openclawCommand: params.openclawCommand,
+          args: ["--profile", params.profile, "gateway", "restart"],
+          timeoutMs: 60_000,
+          errorMessage: "Failed to restart gateway after plugin install.",
+        });
+      } catch {
+        // Gateway may not be running yet (first bootstrap) — ignore.
+      }
+    }
+
+    return {
+      installedPluginIds,
+      migratedLegacyDenchPlugin,
+    };
   } catch {
-    return false;
+    return {
+      installedPluginIds: [],
+      migratedLegacyDenchPlugin: false,
+    };
   }
 }
 
@@ -1308,7 +1491,7 @@ function readBootstrapConfig(stateDir: string): Record<string, unknown> | undefi
       continue;
     }
     try {
-      const raw = JSON.parse(readFileSync(configPath, "utf-8"));
+      const raw = json5.parse(readFileSync(configPath, "utf-8"));
       if (raw && typeof raw === "object") {
         return raw as Record<string, unknown>;
       }
@@ -1348,6 +1531,25 @@ export function checkAgentAuth(
   if (!provider) {
     return { ok: false, detail: "No model provider configured." };
   }
+  const rawConfig = readBootstrapConfig(stateDir) as {
+    models?: {
+      providers?: Record<string, unknown>;
+    };
+  } | undefined;
+  const customProvider = rawConfig?.models?.providers?.[provider];
+  if (customProvider && typeof customProvider === "object") {
+    const apiKey = (customProvider as Record<string, unknown>).apiKey;
+    if (
+      (typeof apiKey === "string" && apiKey.trim().length > 0) ||
+      (apiKey && typeof apiKey === "object")
+    ) {
+      return {
+        ok: true,
+        provider,
+        detail: `Custom provider credentials configured for ${provider}.`,
+      };
+    }
+  }
   const authPath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
   if (!existsSync(authPath)) {
     return {
@@ -1357,7 +1559,7 @@ export function checkAgentAuth(
     };
   }
   try {
-    const raw = JSON.parse(readFileSync(authPath, "utf-8"));
+    const raw = json5.parse(readFileSync(authPath, "utf-8"));
     const profiles = raw?.profiles;
     if (!profiles || typeof profiles !== "object") {
       return { ok: false, provider, detail: `auth-profiles.json has no profiles configured.` };
@@ -1576,6 +1778,287 @@ function logBootstrapChecklist(diagnostics: BootstrapDiagnostics, runtime: Runti
   }
 }
 
+function isExplicitDenchCloudRequest(opts: BootstrapOptions): boolean {
+  return Boolean(
+    opts.denchCloud ||
+      opts.denchCloudApiKey?.trim() ||
+      opts.denchCloudModel?.trim() ||
+      opts.denchGatewayUrl?.trim(),
+  );
+}
+
+function resolveDenchCloudApiKeyCandidate(params: {
+  opts: BootstrapOptions;
+  existingApiKey?: string;
+}): string | undefined {
+  return (
+    params.opts.denchCloudApiKey?.trim() ||
+    process.env.DENCH_CLOUD_API_KEY?.trim() ||
+    process.env.DENCH_API_KEY?.trim() ||
+    params.existingApiKey?.trim()
+  );
+}
+
+async function promptForDenchCloudApiKey(initialValue?: string): Promise<string | undefined> {
+  const value = await text({
+    message: stylePromptMessage(
+      "Enter your Dench Cloud API key (sign up at dench.com and get it at dench.com/settings)",
+    ),
+    ...(initialValue ? { initialValue } : {}),
+    validate: (input) => (input?.trim().length ? undefined : "API key is required."),
+  });
+  if (isCancel(value)) {
+    return undefined;
+  }
+  return String(value).trim();
+}
+
+async function promptForDenchCloudModel(params: {
+  models: DenchCloudCatalogModel[];
+  initialStableId?: string;
+}): Promise<string | undefined> {
+  const sorted = [...params.models].sort((a, b) => {
+    const aRec = a.id === RECOMMENDED_DENCH_CLOUD_MODEL_ID ? 0 : 1;
+    const bRec = b.id === RECOMMENDED_DENCH_CLOUD_MODEL_ID ? 0 : 1;
+    return aRec - bRec;
+  });
+  const selection = await select({
+    message: stylePromptMessage("Choose your default Dench Cloud model"),
+    options: sorted.map((model) => ({
+      value: model.stableId,
+      label: model.displayName,
+      hint: formatDenchCloudModelHint(model),
+    })),
+    ...(params.initialStableId ? { initialValue: params.initialStableId } : {}),
+  });
+  if (isCancel(selection)) {
+    return undefined;
+  }
+  return String(selection);
+}
+
+async function applyDenchCloudBootstrapConfig(params: {
+  openclawCommand: string;
+  profile: string;
+  stateDir: string;
+  gatewayUrl: string;
+  apiKey: string;
+  catalog: DenchCloudCatalogLoadResult;
+  selectedModel: string;
+}): Promise<void> {
+  const raw = readBootstrapConfig(params.stateDir) as {
+    agents?: {
+      defaults?: {
+        models?: unknown;
+      };
+    };
+  } | undefined;
+  const existingAgentModels =
+    raw?.agents?.defaults?.models && typeof raw.agents.defaults.models === "object"
+      ? (raw.agents.defaults.models as Record<string, unknown>)
+      : {};
+  const configPatch = buildDenchCloudConfigPatch({
+    gatewayUrl: params.gatewayUrl,
+    apiKey: params.apiKey,
+    models: params.catalog.models,
+  });
+  const nextAgentModels = {
+    ...existingAgentModels,
+    ...((configPatch.agents?.defaults?.models as Record<string, unknown> | undefined) ?? {}),
+  };
+
+  await runOpenClawOrThrow({
+    openclawCommand: params.openclawCommand,
+    args: ["--profile", params.profile, "config", "set", "models.mode", "merge"],
+    timeoutMs: 30_000,
+    errorMessage: "Failed to set models.mode=merge for Dench Cloud.",
+  });
+
+  await setOpenClawConfigJson({
+    openclawCommand: params.openclawCommand,
+    profile: params.profile,
+    key: "models.providers.dench-cloud",
+    value: configPatch.models.providers["dench-cloud"],
+    errorMessage: "Failed to configure models.providers.dench-cloud.",
+  });
+
+  await runOpenClawOrThrow({
+    openclawCommand: params.openclawCommand,
+    args: [
+      "--profile",
+      params.profile,
+      "config",
+      "set",
+      "agents.defaults.model.primary",
+      `dench-cloud/${params.selectedModel}`,
+    ],
+    timeoutMs: 30_000,
+    errorMessage: "Failed to set the default Dench Cloud model.",
+  });
+
+  await setOpenClawConfigJson({
+    openclawCommand: params.openclawCommand,
+    profile: params.profile,
+    key: "agents.defaults.models",
+    value: nextAgentModels,
+    errorMessage: "Failed to update agents.defaults.models for Dench Cloud.",
+  });
+}
+
+async function resolveDenchCloudBootstrapSelection(params: {
+  opts: BootstrapOptions;
+  nonInteractive: boolean;
+  stateDir: string;
+  runtime: RuntimeEnv;
+}): Promise<DenchCloudBootstrapSelection> {
+  const rawConfig = readBootstrapConfig(params.stateDir);
+  const existing = readConfiguredDenchCloudSettings(rawConfig);
+  const explicitRequest = isExplicitDenchCloudRequest(params.opts);
+  const currentProvider = resolveModelProvider(params.stateDir);
+  const existingDenchConfigured = currentProvider === "dench-cloud" && Boolean(existing.apiKey);
+  const gatewayUrl = normalizeDenchGatewayUrl(
+    params.opts.denchGatewayUrl?.trim() ||
+      process.env.DENCH_GATEWAY_URL?.trim() ||
+      existing.gatewayUrl ||
+      DEFAULT_DENCH_CLOUD_GATEWAY_URL,
+  );
+
+  if (params.nonInteractive) {
+    if (!explicitRequest && !existingDenchConfigured) {
+      return { enabled: false };
+    }
+
+    const apiKey = resolveDenchCloudApiKeyCandidate({
+      opts: params.opts,
+      existingApiKey: existing.apiKey,
+    });
+    if (!apiKey) {
+      throw new Error(
+        "Dench Cloud bootstrap requires --dench-cloud-api-key or DENCH_CLOUD_API_KEY in non-interactive mode.",
+      );
+    }
+
+    await validateDenchCloudApiKey(gatewayUrl, apiKey);
+    const catalog = await fetchDenchCloudCatalog(gatewayUrl);
+    const selected = resolveDenchCloudModel(
+      catalog.models,
+      params.opts.denchCloudModel?.trim() ||
+        process.env.DENCH_CLOUD_MODEL?.trim() ||
+        existing.selectedModel,
+    );
+    if (!selected) {
+      throw new Error("Configured Dench Cloud model is not available.");
+    }
+
+    return {
+      enabled: true,
+      apiKey,
+      gatewayUrl,
+      selectedModel: selected.stableId,
+      catalog,
+    };
+  }
+
+  const wantsDenchCloud = explicitRequest
+    ? true
+    : await confirm({
+      message: stylePromptMessage(
+        "Use Dench API Key for inference? Sign up on dench.com and get your API key at dench.com/settings.",
+      ),
+      initialValue: existingDenchConfigured || !currentProvider,
+    });
+  if (isCancel(wantsDenchCloud) || !wantsDenchCloud) {
+    return { enabled: false };
+  }
+
+  let apiKey = resolveDenchCloudApiKeyCandidate({
+    opts: params.opts,
+    existingApiKey: existing.apiKey,
+  });
+  const showSpinners = !params.opts.json;
+
+  while (true) {
+    apiKey = await promptForDenchCloudApiKey(apiKey);
+    if (!apiKey) {
+      throw new Error("Dench Cloud setup cancelled before an API key was provided.");
+    }
+
+    const keySpinner = showSpinners ? spinner() : null;
+    keySpinner?.start("Validating API key…");
+    try {
+      await validateDenchCloudApiKey(gatewayUrl, apiKey);
+      keySpinner?.stop("API key is valid.");
+    } catch (error) {
+      keySpinner?.stop("API key validation failed.");
+      params.runtime.log(theme.warn(error instanceof Error ? error.message : String(error)));
+      const retry = await confirm({
+        message: stylePromptMessage("Try another Dench Cloud API key?"),
+        initialValue: true,
+      });
+      if (isCancel(retry) || !retry) {
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+      continue;
+    }
+
+    const catalogSpinner = showSpinners ? spinner() : null;
+    catalogSpinner?.start("Fetching available models…");
+    const catalog = await fetchDenchCloudCatalog(gatewayUrl);
+    if (catalog.source === "fallback") {
+      catalogSpinner?.stop(
+        `Model catalog fallback active (${catalog.detail ?? "public catalog unavailable"}).`,
+      );
+    } else {
+      catalogSpinner?.stop("Models loaded.");
+    }
+
+    const explicitModel = params.opts.denchCloudModel?.trim() || process.env.DENCH_CLOUD_MODEL?.trim();
+    const preselected = resolveDenchCloudModel(catalog.models, explicitModel || existing.selectedModel);
+    if (!preselected && explicitModel) {
+      params.runtime.log(theme.warn(`Configured Dench Cloud model "${explicitModel}" is unavailable.`));
+    }
+    const selection = await promptForDenchCloudModel({
+      models: catalog.models,
+      initialStableId: preselected?.stableId || existing.selectedModel,
+    });
+    if (!selection) {
+      throw new Error("Dench Cloud setup cancelled during model selection.");
+    }
+    const selected = resolveDenchCloudModel(catalog.models, selection);
+    if (!selected) {
+      throw new Error("No Dench Cloud model could be selected.");
+    }
+
+    const verifySpinner = showSpinners ? spinner() : null;
+    verifySpinner?.start("Verifying Dench Cloud configuration…");
+    try {
+      await validateDenchCloudApiKey(gatewayUrl, apiKey);
+      verifySpinner?.stop("Dench Cloud ready.");
+    } catch (error) {
+      verifySpinner?.stop("Verification failed.");
+      params.runtime.log(
+        theme.warn(error instanceof Error ? error.message : String(error)),
+      );
+      const retry = await confirm({
+        message: stylePromptMessage("Re-enter your Dench Cloud API key?"),
+        initialValue: true,
+      });
+      if (isCancel(retry) || !retry) {
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+      continue;
+    }
+
+    return {
+      enabled: true,
+      apiKey,
+      gatewayUrl,
+      selectedModel: selected.stableId,
+      catalog,
+    };
+  }
+}
+
 async function shouldRunUpdate(params: {
   opts: BootstrapOptions;
   runtime: RuntimeEnv;
@@ -1684,6 +2167,15 @@ export async function bootstrapCommand(
   // port, or find an available one in the DenchClaw range (19001+).
   // NEVER claim OpenClaw's default port (18789) — that belongs to the host
   // OpenClaw installation and sharing it causes port-hijack on restart.
+  //
+  // When a persisted port exists, trust it unconditionally — the process
+  // occupying it is almost certainly our own gateway from a previous run.
+  // The onboard step will stop/replace the existing daemon on the same profile.
+  // Only scan for a free port on first run (no persisted port) when 19001 is
+  // occupied by something external.
+  const preCloudSpinner = !opts.json ? spinner() : null;
+  preCloudSpinner?.start("Preparing gateway configuration…");
+
   const explicitPort = parseOptionalPort(opts.gatewayPort);
   let gatewayPort: number;
   let portAutoAssigned = false;
@@ -1692,19 +2184,18 @@ export async function bootstrapCommand(
     gatewayPort = explicitPort;
   } else {
     const existingPort = readExistingGatewayPort(stateDir);
-    if (
-      isPersistedPortAcceptable(existingPort) &&
-      (await isPortAvailable(existingPort))
-    ) {
+    if (isPersistedPortAcceptable(existingPort)) {
       gatewayPort = existingPort;
     } else if (await isPortAvailable(DENCHCLAW_GATEWAY_PORT_START)) {
       gatewayPort = DENCHCLAW_GATEWAY_PORT_START;
     } else {
+      preCloudSpinner?.message("Scanning for available port…");
       const availablePort = await findAvailablePort(
         DENCHCLAW_GATEWAY_PORT_START + 1,
         MAX_PORT_SCAN_ATTEMPTS,
       );
       if (!availablePort) {
+        preCloudSpinner?.stop("Port scan failed.");
         throw new Error(
           `Could not find an available gateway port between ${DENCHCLAW_GATEWAY_PORT_START} and ${DENCHCLAW_GATEWAY_PORT_START + MAX_PORT_SCAN_ATTEMPTS}. ` +
             `Please specify a port explicitly with --gateway-port.`,
@@ -1725,27 +2216,96 @@ export async function bootstrapCommand(
 
   // Pin OpenClaw to the managed default workspace before onboarding so bootstrap
   // never drifts into creating/using legacy workspace-* paths.
+  preCloudSpinner?.message("Configuring default workspace…");
   await ensureDefaultWorkspacePath(openclawCommand, profile, workspaceDir);
 
-  const packageRoot = resolveCliPackageRoot();
+  preCloudSpinner?.stop("Gateway ready.");
 
-  // Install bundled plugins BEFORE onboard so the gateway daemon starts with
-  // plugins.allow already configured, suppressing "plugins.allow is empty" warnings.
-  const posthogPluginInstalled = await installBundledPlugins({
+  const denchCloudSelection = await resolveDenchCloudBootstrapSelection({
+    opts,
+    nonInteractive,
+    stateDir,
+    runtime,
+  });
+
+  const packageRoot = resolveCliPackageRoot();
+  const managedBundledPlugins: BundledPluginSpec[] = [
+    {
+      pluginId: "posthog-analytics",
+      sourceDirName: "posthog-analytics",
+      ...(process.env.POSTHOG_KEY
+        ? {
+          enabled: true,
+          config: {
+            apiKey: process.env.POSTHOG_KEY,
+          },
+        }
+        : {}),
+    },
+    {
+      pluginId: "dench-ai-gateway",
+      sourceDirName: "dench-ai-gateway",
+      enabled: true,
+      config: {
+        gatewayUrl:
+          denchCloudSelection.gatewayUrl ||
+          opts.denchGatewayUrl?.trim() ||
+          process.env.DENCH_GATEWAY_URL?.trim() ||
+          DEFAULT_DENCH_CLOUD_GATEWAY_URL,
+      },
+    },
+  ];
+
+  // Trust managed bundled plugins BEFORE onboard so the gateway daemon never
+  // starts with transient "untracked local plugin" warnings for DenchClaw-owned
+  // extensions.
+  const preOnboardSpinner = !opts.json ? spinner() : null;
+  preOnboardSpinner?.start("Syncing bundled plugins…");
+  const preOnboardPlugins = await syncBundledPlugins({
     openclawCommand,
     profile,
     stateDir,
-    posthogKey: process.env.POSTHOG_KEY || "",
+    plugins: managedBundledPlugins,
+    restartGateway: true,
   });
+  const posthogPluginInstalled = preOnboardPlugins.installedPluginIds.includes("posthog-analytics");
 
   // Ensure gateway.mode=local BEFORE onboard so the daemon starts successfully.
   // Previously this ran post-onboard, but onboard --install-daemon starts the
   // gateway immediately — if gateway.mode is unset at that point the daemon
   // blocks with "set gateway.mode=local" and enters a crash loop.
+  preOnboardSpinner?.message("Configuring gateway…");
   await ensureGatewayModeLocal(openclawCommand, profile);
   // Persist the assigned port so the daemon binds to the correct port on first
   // start rather than falling back to the default.
   await ensureGatewayPort(openclawCommand, profile, gatewayPort);
+
+  // Push plugin trust through the CLI as the LAST config step before onboard.
+  // syncBundledPlugins writes plugins.allow / plugins.load.paths to the raw
+  // JSON file, but subsequent `openclaw config set` calls may clobber them.
+  // Re-applying via the CLI ensures OpenClaw's own config resolution sees them.
+  if (preOnboardPlugins.installedPluginIds.length > 0) {
+    preOnboardSpinner?.message("Trusting managed plugins…");
+    await setOpenClawConfigJson({
+      openclawCommand,
+      profile,
+      key: "plugins.allow",
+      value: preOnboardPlugins.installedPluginIds,
+      errorMessage: "Failed to set plugins.allow for managed plugins.",
+    });
+    const pluginLoadPaths = managedBundledPlugins.map((plugin) =>
+      normalizeFilesystemPath(path.join(stateDir, "extensions", plugin.sourceDirName)),
+    );
+    await setOpenClawConfigJson({
+      openclawCommand,
+      profile,
+      key: "plugins.load.paths",
+      value: pluginLoadPaths,
+      errorMessage: "Failed to set plugins.load.paths for managed plugins.",
+    });
+  }
+
+  preOnboardSpinner?.stop("Ready to onboard.");
 
   const onboardArgv = [
     "--profile",
@@ -1762,6 +2322,9 @@ export async function bootstrapCommand(
   }
   if (nonInteractive) {
     onboardArgv.push("--non-interactive");
+  }
+  if (denchCloudSelection.enabled) {
+    onboardArgv.push("--auth-choice", "skip");
   }
 
   onboardArgv.push("--accept-risk", "--skip-ui");
@@ -1799,6 +2362,34 @@ export async function bootstrapCommand(
   // DenchClaw requires the full tool profile; onboarding defaults can drift to
   // messaging-only, so enforce this on every bootstrap run.
   await ensureToolsProfile(openclawCommand, profile);
+
+  if (
+    denchCloudSelection.enabled &&
+    denchCloudSelection.apiKey &&
+    denchCloudSelection.gatewayUrl &&
+    denchCloudSelection.selectedModel &&
+    denchCloudSelection.catalog
+  ) {
+    postOnboardSpinner?.message("Applying Dench Cloud model config…");
+    await applyDenchCloudBootstrapConfig({
+      openclawCommand,
+      profile,
+      stateDir,
+      gatewayUrl: denchCloudSelection.gatewayUrl,
+      apiKey: denchCloudSelection.apiKey,
+      catalog: denchCloudSelection.catalog,
+      selectedModel: denchCloudSelection.selectedModel,
+    });
+  }
+
+  postOnboardSpinner?.message("Refreshing managed plugin config…");
+  await syncBundledPlugins({
+    openclawCommand,
+    profile,
+    stateDir,
+    plugins: managedBundledPlugins,
+    restartGateway: true,
+  });
 
   postOnboardSpinner?.message("Configuring subagent defaults…");
   await ensureSubagentDefaults(openclawCommand, profile);

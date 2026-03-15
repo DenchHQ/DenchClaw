@@ -12,7 +12,12 @@ const promptMocks = vi.hoisted(() => {
   return {
     cancelSignal,
     confirmDecision: false as boolean | symbol,
+    confirmDecisions: [] as Array<boolean | symbol>,
+    selectValue: "" as string | symbol,
+    textValue: "" as string | symbol,
     confirm: vi.fn(async () => false as boolean | symbol),
+    select: vi.fn(async () => "" as string | symbol),
+    text: vi.fn(async () => "" as string | symbol),
     isCancel: vi.fn((value: unknown) => value === cancelSignal),
     spinner: vi.fn(() => ({
       start: vi.fn(),
@@ -24,6 +29,8 @@ const promptMocks = vi.hoisted(() => {
 
 vi.mock("@clack/prompts", () => ({
   confirm: promptMocks.confirm,
+  select: promptMocks.select,
+  text: promptMocks.text,
   isCancel: promptMocks.isCancel,
   spinner: promptMocks.spinner,
 }));
@@ -61,7 +68,20 @@ function createWebProfilesResponse(params?: {
   const payload = params?.payload ?? { profiles: [], activeProfile: "dench" };
   return {
     status,
+    ok: status >= 200 && status < 300,
     json: async () => payload,
+  } as unknown as Response;
+}
+
+function createJsonResponse(params?: {
+  status?: number;
+  payload?: unknown;
+}): Response {
+  const status = params?.status ?? 200;
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    json: async () => params?.payload ?? {},
   } as unknown as Response;
 }
 
@@ -99,6 +119,41 @@ function writeBootstrapFixtures(stateDir: string): void {
       },
     }),
   );
+}
+
+function parseConfigSetValue(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && raw.trim() !== "") {
+      return numeric;
+    }
+    return raw;
+  }
+}
+
+function applyConfigSet(stateDir: string, keyPath: string, rawValue: string): void {
+  const configPath = path.join(stateDir, "openclaw.json");
+  const current = existsSync(configPath)
+    ? JSON.parse(readFileSync(configPath, "utf-8"))
+    : {};
+  const segments = keyPath.split(".");
+  let cursor: Record<string, unknown> = current;
+  for (const segment of segments.slice(0, -1)) {
+    const next = cursor[segment];
+    if (!next || typeof next !== "object" || Array.isArray(next)) {
+      cursor[segment] = {};
+    }
+    cursor = cursor[segment] as Record<string, unknown>;
+  }
+  const leaf = segments.at(-1);
+  if (leaf) {
+    cursor[leaf] = parseConfigSetValue(rawValue);
+  }
+  writeFileSync(configPath, JSON.stringify(current));
 }
 
 function createMockChild(params: {
@@ -187,8 +242,19 @@ describe("bootstrapCommand always-onboard behavior", () => {
       VITEST: "true",
     };
     promptMocks.confirmDecision = false;
+    promptMocks.confirmDecisions = [];
+    promptMocks.selectValue = "gpt-5.4";
+    promptMocks.textValue = "dench_test_key";
     promptMocks.confirm.mockReset();
-    promptMocks.confirm.mockImplementation(async () => promptMocks.confirmDecision);
+    promptMocks.confirm.mockImplementation(async () =>
+      promptMocks.confirmDecisions.length > 0
+        ? promptMocks.confirmDecisions.shift()!
+        : promptMocks.confirmDecision
+    );
+    promptMocks.select.mockReset();
+    promptMocks.select.mockImplementation(async () => promptMocks.selectValue);
+    promptMocks.text.mockReset();
+    promptMocks.text.mockImplementation(async () => promptMocks.textValue);
     promptMocks.isCancel.mockReset();
     promptMocks.isCancel.mockImplementation((value: unknown) => value === promptMocks.cancelSignal);
     promptMocks.spinner.mockClear();
@@ -252,6 +318,19 @@ describe("bootstrapCommand always-onboard behavior", () => {
       if (commandString === "openclaw" && argList.includes("onboard")) {
         if (driftGatewayModeAfterOnboard) {
           gatewayModeConfigValue = "remote\n";
+        }
+        return createMockChild({ code: 0, stdout: "ok\n" }) as never;
+      }
+      if (
+        commandString === "openclaw" &&
+        argList.includes("config") &&
+        argList.includes("set")
+      ) {
+        const setIndex = argList.lastIndexOf("set");
+        const keyPath = argList[setIndex + 1];
+        const rawValue = argList[setIndex + 2];
+        if (keyPath && rawValue !== undefined) {
+          applyConfigSet(stateDir, keyPath, rawValue);
         }
         return createMockChild({ code: 0, stdout: "ok\n" }) as never;
       }
@@ -530,6 +609,333 @@ describe("bootstrapCommand always-onboard behavior", () => {
     expect(onboardCall?.args).toContain("--reset");
   });
 
+  it("uses bootstrap-owned Dench Cloud setup and skips OpenClaw auth onboarding", async () => {
+    writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        agents: {
+          defaults: {
+            model: { primary: "vercel-ai-gateway/anthropic/claude-opus-4.6" },
+          },
+        },
+        gateway: { mode: "local" },
+        plugins: {
+          allow: ["dench-cloud-provider"],
+          load: {
+            paths: [path.join(stateDir, "extensions", "dench-cloud-provider")],
+          },
+          entries: {
+            "dench-cloud-provider": {
+              enabled: true,
+            },
+          },
+        },
+      }),
+    );
+    mkdirSync(path.join(stateDir, "extensions", "dench-cloud-provider"), { recursive: true });
+    writeFileSync(
+      path.join(stateDir, "extensions", "dench-cloud-provider", "index.ts"),
+      "export {};\n",
+    );
+    fetchBehavior = async (url: string) => {
+      if (url.includes("gateway.merseoriginals.com/v1/models")) {
+        return createJsonResponse({ status: 200, payload: { object: "list", data: [] } });
+      }
+      if (url.includes("gateway.merseoriginals.com/v1/public/models")) {
+        return createJsonResponse({
+          status: 200,
+          payload: {
+            object: "list",
+            data: [
+              {
+                id: "gpt-5.4",
+                stableId: "gpt-5.4",
+                name: "GPT-5.4",
+                provider: "openai",
+                transportProvider: "openai",
+                input: ["text", "image"],
+                contextWindow: 128000,
+                maxTokens: 128000,
+                supportsStreaming: true,
+                supportsImages: true,
+                supportsResponses: true,
+                supportsReasoning: false,
+                cost: {
+                  input: 3.375,
+                  output: 20.25,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  marginPercent: 0.35,
+                },
+              },
+              {
+                id: "claude-opus-4.6",
+                stableId: "anthropic.claude-opus-4-6-v1",
+                name: "Claude Opus 4.6",
+                provider: "anthropic",
+                transportProvider: "bedrock",
+                input: ["text", "image"],
+                contextWindow: 200000,
+                maxTokens: 64000,
+                supportsStreaming: true,
+                supportsImages: true,
+                supportsResponses: true,
+                supportsReasoning: false,
+                cost: {
+                  input: 6.75,
+                  output: 33.75,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  marginPercent: 0.35,
+                },
+              },
+            ],
+          },
+        });
+      }
+      if (url.includes("/api/profiles")) {
+        return createWebProfilesResponse();
+      }
+      return createJsonResponse({ status: 404, payload: {} });
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await bootstrapCommand(
+      {
+        nonInteractive: true,
+        noOpen: true,
+        skipUpdate: true,
+        denchCloud: true,
+        denchCloudApiKey: "dench_live_key",
+        denchCloudModel: "anthropic.claude-opus-4-6-v1",
+      },
+      runtime,
+    );
+
+    const onboardCall = spawnCalls.find(
+      (call) => call.command === "openclaw" && call.args.includes("onboard"),
+    );
+    expect(onboardCall?.args).toEqual(
+      expect.arrayContaining([
+        "--profile",
+        "dench",
+        "onboard",
+        "--non-interactive",
+        "--auth-choice",
+        "skip",
+      ]),
+    );
+
+    const updatedConfig = JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf-8"));
+    expect(updatedConfig.models.providers["dench-cloud"].apiKey).toBe("dench_live_key");
+    expect(updatedConfig.agents.defaults.model.primary).toBe(
+      "dench-cloud/anthropic.claude-opus-4-6-v1",
+    );
+    expect(updatedConfig.agents.defaults.models["dench-cloud/anthropic.claude-opus-4-6-v1"]).toEqual(
+      expect.objectContaining({ alias: "Claude Opus 4.6 (Dench Cloud)" }),
+    );
+    expect(updatedConfig.plugins.allow).toContain("posthog-analytics");
+    expect(updatedConfig.plugins.allow).toContain("dench-ai-gateway");
+    expect(updatedConfig.plugins.allow).not.toContain("dench-cloud-provider");
+    expect(updatedConfig.plugins.entries["dench-cloud-provider"]).toBeUndefined();
+    expect(updatedConfig.plugins.entries["dench-ai-gateway"]).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        config: expect.objectContaining({
+          gatewayUrl: "https://gateway.merseoriginals.com",
+        }),
+      }),
+    );
+    expect(updatedConfig.plugins.installs["posthog-analytics"]).toEqual(
+      expect.objectContaining({
+        source: "path",
+        installPath: expect.stringContaining(path.join("extensions", "posthog-analytics")),
+      }),
+    );
+    expect(updatedConfig.plugins.installs["dench-ai-gateway"]).toEqual(
+      expect.objectContaining({
+        source: "path",
+        installPath: expect.stringContaining(path.join("extensions", "dench-ai-gateway")),
+      }),
+    );
+    expect(existsSync(path.join(stateDir, "extensions", "dench-cloud-provider"))).toBe(false);
+  });
+
+  it("falls back to DenchClaw's bundled model list when the public gateway catalog is unavailable", async () => {
+    fetchBehavior = async (url: string) => {
+      if (url.includes("gateway.merseoriginals.com/v1/models")) {
+        return createJsonResponse({ status: 200, payload: { object: "list", data: [] } });
+      }
+      if (url.includes("gateway.merseoriginals.com/v1/public/models")) {
+        return createJsonResponse({ status: 503, payload: {} });
+      }
+      if (url.includes("/api/profiles")) {
+        return createWebProfilesResponse();
+      }
+      return createJsonResponse({ status: 404, payload: {} });
+    };
+    promptMocks.textValue = "dench_retry_key";
+    promptMocks.selectValue = "anthropic.claude-sonnet-4-6-v1";
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await bootstrapCommand(
+      {
+        denchCloud: true,
+        noOpen: true,
+        skipUpdate: true,
+      },
+      runtime,
+    );
+
+    expect(promptMocks.text).toHaveBeenCalledTimes(1);
+    expect(promptMocks.select).toHaveBeenCalledTimes(1);
+    const onboardCall = spawnCalls.find(
+      (call) => call.command === "openclaw" && call.args.includes("onboard"),
+    );
+    expect(onboardCall?.options?.stdio).toBe("inherit");
+    expect(onboardCall?.args).toEqual(expect.arrayContaining(["--auth-choice", "skip"]));
+    expect(onboardCall?.args).not.toContain("--non-interactive");
+    const updatedConfig = JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf-8"));
+    expect(updatedConfig.agents.defaults.model.primary).toBe(
+      "dench-cloud/anthropic.claude-sonnet-4-6-v1",
+    );
+    expect(updatedConfig.models.providers["dench-cloud"].models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "gpt-5.4" }),
+        expect.objectContaining({ id: "anthropic.claude-opus-4-6-v1" }),
+        expect.objectContaining({ id: "anthropic.claude-sonnet-4-6-v1" }),
+      ]),
+    );
+  });
+
+  it("re-prompts for Dench Cloud every bootstrap and pre-fills the saved key and model", async () => {
+    writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        agents: {
+          defaults: {
+            model: { primary: "dench-cloud/anthropic.claude-opus-4-6-v1" },
+          },
+        },
+        models: {
+          providers: {
+            "dench-cloud": {
+              baseUrl: "https://gateway.merseoriginals.com/v1",
+              apiKey: "dench_saved_key",
+            },
+          },
+        },
+        gateway: { mode: "local" },
+      }),
+    );
+    fetchBehavior = async (url: string) => {
+      if (url.includes("gateway.merseoriginals.com/v1/models")) {
+        return createJsonResponse({ status: 200, payload: { object: "list", data: [] } });
+      }
+      if (url.includes("gateway.merseoriginals.com/v1/public/models")) {
+        return createJsonResponse({
+          status: 200,
+          payload: {
+            object: "list",
+            data: [
+              {
+                id: "gpt-5.4",
+                stableId: "gpt-5.4",
+                name: "GPT-5.4",
+                provider: "openai",
+                transportProvider: "openai",
+                input: ["text", "image"],
+                contextWindow: 128000,
+                maxTokens: 128000,
+                supportsStreaming: true,
+                supportsImages: true,
+                supportsResponses: true,
+                supportsReasoning: false,
+                cost: {
+                  input: 3.375,
+                  output: 20.25,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  marginPercent: 0.35,
+                },
+              },
+              {
+                id: "claude-opus-4.6",
+                stableId: "anthropic.claude-opus-4-6-v1",
+                name: "Claude Opus 4.6",
+                provider: "anthropic",
+                transportProvider: "bedrock",
+                input: ["text", "image"],
+                contextWindow: 200000,
+                maxTokens: 64000,
+                supportsStreaming: true,
+                supportsImages: true,
+                supportsResponses: true,
+                supportsReasoning: false,
+                cost: {
+                  input: 6.75,
+                  output: 33.75,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  marginPercent: 0.35,
+                },
+              },
+            ],
+          },
+        });
+      }
+      if (url.includes("/api/profiles")) {
+        return createWebProfilesResponse();
+      }
+      return createJsonResponse({ status: 404, payload: {} });
+    };
+    promptMocks.confirmDecision = true;
+    promptMocks.textValue = "dench_saved_key";
+    promptMocks.selectValue = "anthropic.claude-opus-4-6-v1";
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await withForcedStdinTty(true, async () => {
+      await bootstrapCommand(
+        {
+          noOpen: true,
+          skipUpdate: true,
+        },
+        runtime,
+      );
+    });
+
+    expect(promptMocks.confirm).toHaveBeenCalledTimes(1);
+    expect(promptMocks.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValue: "dench_saved_key",
+      }),
+    );
+    expect(promptMocks.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValue: "anthropic.claude-opus-4-6-v1",
+      }),
+    );
+
+    const onboardCall = spawnCalls.find(
+      (call) => call.command === "openclaw" && call.args.includes("onboard"),
+    );
+    expect(onboardCall?.options?.stdio).toBe("inherit");
+    expect(onboardCall?.args).toEqual(expect.arrayContaining(["--auth-choice", "skip"]));
+    expect(onboardCall?.args).not.toContain("--non-interactive");
+  });
+
   it("runs update before onboarding when --update-now is set", async () => {
     const runtime: RuntimeEnv = {
       log: vi.fn(),
@@ -560,7 +966,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
   });
 
   it("runs update before onboarding when interactive prompt is accepted", async () => {
-    promptMocks.confirmDecision = true;
+    promptMocks.confirmDecisions = [true, false];
     const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: vi.fn(),
@@ -576,7 +982,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
       );
     });
 
-    expect(promptMocks.confirm).toHaveBeenCalledTimes(1);
+    expect(promptMocks.confirm).toHaveBeenCalledTimes(2);
     const updateIndex = spawnCalls.findIndex(
       (call) =>
         call.command === "openclaw" && call.args.includes("update") && call.args.includes("--yes"),
@@ -592,7 +998,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
 
   it("skips update prompt right after installing openclaw@latest (avoids redundant update checks)", async () => {
     forceGlobalMissing = true;
-    promptMocks.confirmDecision = true;
+    promptMocks.confirmDecision = false;
     const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: vi.fn(),
@@ -621,12 +1027,12 @@ describe("bootstrapCommand always-onboard behavior", () => {
     );
 
     expect(installedGlobalOpenClaw).toBe(true);
-    expect(promptMocks.confirm).toHaveBeenCalledTimes(0);
+    expect(promptMocks.confirm).toHaveBeenCalledTimes(1);
     expect(updateCalled).toBe(false);
   });
 
   it("skips update when interactive prompt is declined", async () => {
-    promptMocks.confirmDecision = false;
+    promptMocks.confirmDecisions = [false, false];
     const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: vi.fn(),
@@ -642,7 +1048,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
       );
     });
 
-    expect(promptMocks.confirm).toHaveBeenCalledTimes(1);
+    expect(promptMocks.confirm).toHaveBeenCalledTimes(2);
     const updateCalled = spawnCalls.some(
       (call) =>
         call.command === "openclaw" && call.args.includes("update") && call.args.includes("--yes"),

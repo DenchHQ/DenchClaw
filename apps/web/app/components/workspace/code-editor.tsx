@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { DiffCard } from "../diff-viewer";
+import { fileWriteUrl } from "@/lib/workspace-paths";
 
 const EXT_TO_MONACO_LANG: Record<string, string> = {
 	ts: "typescript",
@@ -232,7 +233,7 @@ function EditorInner({ content, filename, filePath, className }: CodeEditorProps
 		const value = editorRef.current.getValue();
 		setSaveState("saving");
 		try {
-			const res = await fetch("/api/workspace/file", {
+			const res = await fetch(fileWriteUrl(filePath), {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ path: filePath, content: value }),
