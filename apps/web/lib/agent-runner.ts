@@ -156,6 +156,9 @@ const DEFAULT_GATEWAY_PORT = 18_789;
 const OPEN_TIMEOUT_MS = 8_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 const DEFAULT_GATEWAY_CLIENT_CAPS = ["tool-events"];
+// operator.admin already covers the operator RPCs this web path uses, and
+// keeping the requested scope set minimal avoids write-scope mismatches.
+const DEFAULT_GATEWAY_OPERATOR_SCOPES = ["operator.admin"];
 const SESSIONS_PATCH_RETRY_DELAY_MS = 150;
 const SESSIONS_PATCH_MAX_ATTEMPTS = 2;
 
@@ -323,7 +326,7 @@ export function buildConnectParams(
 		locale: "en-US",
 		userAgent: "denchclaw-web",
 		role: "operator",
-		scopes: ["operator.read", "operator.write", "operator.admin"],
+		scopes: DEFAULT_GATEWAY_OPERATOR_SCOPES,
 		caps,
 		...(auth ? { auth } : {}),
 	};
