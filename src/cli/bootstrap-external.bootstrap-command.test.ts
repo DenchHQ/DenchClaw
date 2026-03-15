@@ -162,6 +162,8 @@ describe("bootstrapCommand always-onboard behavior", () => {
   let healthFailuresBeforeSuccess = 0;
   let healthCallCount = 0;
   let alwaysHealthFail = false;
+  let gatewayModeConfigValue = "local\n";
+  let driftGatewayModeAfterOnboard = false;
 
   beforeEach(() => {
     homeDir = createTempStateDir();
@@ -173,6 +175,8 @@ describe("bootstrapCommand always-onboard behavior", () => {
     healthFailuresBeforeSuccess = 0;
     healthCallCount = 0;
     alwaysHealthFail = false;
+    gatewayModeConfigValue = "local\n";
+    driftGatewayModeAfterOnboard = false;
     process.env = {
       ...originalEnv,
       HOME: homeDir,
@@ -234,7 +238,22 @@ describe("bootstrapCommand always-onboard behavior", () => {
         argList.includes("get") &&
         argList.includes("gateway.mode")
       ) {
-        return createMockChild({ code: 0, stdout: "local\n" }) as never;
+        return createMockChild({ code: 0, stdout: gatewayModeConfigValue }) as never;
+      }
+      if (
+        commandString === "openclaw" &&
+        argList.includes("config") &&
+        argList.includes("set") &&
+        argList.includes("gateway.mode")
+      ) {
+        gatewayModeConfigValue = `${argList.at(-1) ?? ""}\n`;
+        return createMockChild({ code: 0, stdout: "ok\n" }) as never;
+      }
+      if (commandString === "openclaw" && argList.includes("onboard")) {
+        if (driftGatewayModeAfterOnboard) {
+          gatewayModeConfigValue = "remote\n";
+        }
+        return createMockChild({ code: 0, stdout: "ok\n" }) as never;
       }
       if (commandString === "openclaw" && argList.includes("health")) {
         healthCallCount += 1;
@@ -314,6 +333,152 @@ describe("bootstrapCommand always-onboard behavior", () => {
     );
     expect(onboardCalls[0]?.options?.stdio).toEqual(["ignore", "pipe", "pipe"]);
     expect(summary.onboarded).toBe(true);
+  });
+
+  it("sets gateway.mode before onboard when config is missing it (prevents first-start daemon crash loop)", async () => {
+    gatewayModeConfigValue = "\n";
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await bootstrapCommand(
+      {
+        nonInteractive: true,
+        noOpen: true,
+        skipUpdate: true,
+      },
+      runtime,
+    );
+
+    const gatewayModeGetIndex = spawnCalls.findIndex(
+      (call) =>
+        call.command === "openclaw" &&
+        call.args.includes("config") &&
+        call.args.includes("get") &&
+        call.args.includes("gateway.mode"),
+    );
+    const gatewayModeSetIndex = spawnCalls.findIndex(
+      (call) =>
+        call.command === "openclaw" &&
+        call.args.includes("config") &&
+        call.args.includes("set") &&
+        call.args.includes("gateway.mode") &&
+        call.args.includes("local"),
+    );
+    const onboardIndex = spawnCalls.findIndex(
+      (call) => call.command === "openclaw" && call.args.includes("onboard"),
+    );
+
+    expect(gatewayModeGetIndex).toBeGreaterThan(-1);
+    expect(gatewayModeSetIndex).toBeGreaterThan(-1);
+    expect(onboardIndex).toBeGreaterThan(-1);
+    expect(gatewayModeGetIndex).toBeLessThan(gatewayModeSetIndex);
+    expect(gatewayModeSetIndex).toBeLessThan(onboardIndex);
+  });
+
+  it("sets gateway.port before onboard so the first daemon start uses DenchClaw's selected port", async () => {
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await bootstrapCommand(
+      {
+        nonInteractive: true,
+        noOpen: true,
+        skipUpdate: true,
+      },
+      runtime,
+    );
+
+    const gatewayPortSetIndex = spawnCalls.findIndex(
+      (call) =>
+        call.command === "openclaw" &&
+        call.args.includes("config") &&
+        call.args.includes("set") &&
+        call.args.includes("gateway.port"),
+    );
+    const onboardIndex = spawnCalls.findIndex(
+      (call) => call.command === "openclaw" && call.args.includes("onboard"),
+    );
+
+    expect(gatewayPortSetIndex).toBeGreaterThan(-1);
+    expect(onboardIndex).toBeGreaterThan(-1);
+    expect(gatewayPortSetIndex).toBeLessThan(onboardIndex);
+  });
+
+  it("rechecks gateway.mode after onboard when onboarding drifts it away from local (keeps DenchClaw on a local gateway)", async () => {
+    gatewayModeConfigValue = "\n";
+    driftGatewayModeAfterOnboard = true;
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await bootstrapCommand(
+      {
+        nonInteractive: true,
+        noOpen: true,
+        skipUpdate: true,
+      },
+      runtime,
+    );
+
+    const gatewayModeSetIndices = spawnCalls.flatMap((call, index) =>
+      call.command === "openclaw" &&
+      call.args.includes("config") &&
+      call.args.includes("set") &&
+      call.args.includes("gateway.mode") &&
+      call.args.includes("local")
+        ? [index]
+        : [],
+    );
+    const onboardIndex = spawnCalls.findIndex(
+      (call) => call.command === "openclaw" && call.args.includes("onboard"),
+    );
+
+    expect(gatewayModeSetIndices).toHaveLength(2);
+    expect(onboardIndex).toBeGreaterThan(-1);
+    expect(gatewayModeSetIndices[0]).toBeLessThan(onboardIndex);
+    expect(gatewayModeSetIndices[1]).toBeGreaterThan(onboardIndex);
+  });
+
+  it("reapplies gateway.port after onboard so onboarding defaults cannot desync DenchClaw's gateway target", async () => {
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await bootstrapCommand(
+      {
+        nonInteractive: true,
+        noOpen: true,
+        skipUpdate: true,
+      },
+      runtime,
+    );
+
+    const gatewayPortSetIndices = spawnCalls.flatMap((call, index) =>
+      call.command === "openclaw" &&
+      call.args.includes("config") &&
+      call.args.includes("set") &&
+      call.args.includes("gateway.port")
+        ? [index]
+        : [],
+    );
+    const onboardIndex = spawnCalls.findIndex(
+      (call) => call.command === "openclaw" && call.args.includes("onboard"),
+    );
+
+    expect(gatewayPortSetIndices).toHaveLength(2);
+    expect(onboardIndex).toBeGreaterThan(-1);
+    expect(gatewayPortSetIndices[0]).toBeLessThan(onboardIndex);
+    expect(gatewayPortSetIndices[1]).toBeGreaterThan(onboardIndex);
   });
 
   it("ignores bootstrap --profile override and keeps dench profile (prevents profile drift)", async () => {

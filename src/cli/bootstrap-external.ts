@@ -1761,8 +1761,11 @@ export async function bootstrapCommand(
   const postOnboardSpinner = !opts.json ? spinner() : null;
   postOnboardSpinner?.start("Finalizing configuration…");
 
-  // gateway.mode and gateway.port are now set pre-onboard (before
-  // --install-daemon) so the daemon can start without blocking.  See above.
+  // Re-apply gateway settings after onboard so interactive/wizard flows cannot
+  // drift DenchClaw away from its required local gateway and selected port.
+  await ensureGatewayModeLocal(openclawCommand, profile);
+  postOnboardSpinner?.message("Configuring gateway port…");
+  await ensureGatewayPort(openclawCommand, profile, gatewayPort);
   postOnboardSpinner?.message("Setting tools profile…");
   // DenchClaw requires the full tool profile; onboarding defaults can drift to
   // messaging-only, so enforce this on every bootstrap run.
