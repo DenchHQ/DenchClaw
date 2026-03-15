@@ -11,7 +11,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { motion, LayoutGroup } from "framer-motion";
 import {
 	Mail, Users, DollarSign, Calendar, Zap, FileText, Database,
 	Code, Bug, Clock, BarChart3, PenTool, Globe, Search, Sparkles,
@@ -813,6 +812,8 @@ type ChatPanelProps = {
 	subagentLabel?: string;
 	/** Back button handler (subagent mode only). */
 	onBack?: () => void;
+	/** Hide the header action buttons (when they're rendered elsewhere, e.g. tab bar). */
+	hideHeaderActions?: boolean;
 };
 
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
@@ -834,6 +835,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			subagentTask,
 			subagentLabel,
 			onBack,
+			hideHeaderActions,
 		},
 		ref,
 	) {
@@ -852,6 +854,9 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		>([]);
 		const [showFilePicker, setShowFilePicker] =
 			useState(false);
+
+		const [mounted, setMounted] = useState(false);
+		useEffect(() => { setMounted(true); }, []);
 
 		// ── Reconnection state ──
 		const [isReconnecting, setIsReconnecting] = useState(false);
@@ -881,10 +886,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const [rawView, _setRawView] = useState(false);
 
 		// ── Hero state (new chat screen) ──
-		const [greeting, setGreeting] = useState("");
-		const [visiblePrompts, setVisiblePrompts] = useState<typeof PROMPT_SUGGESTIONS>([]);
+		const [greeting, setGreeting] = useState("How can I help?");
+		const [visiblePrompts, setVisiblePrompts] = useState(PROMPT_SUGGESTIONS.slice(0, 7));
+		const heroInitRef = useRef(false);
 
 		useEffect(() => {
+			if (heroInitRef.current) return;
+			heroInitRef.current = true;
 			const greetings = [
 				"Ready to build?",
 				"Let's automate something?",
@@ -901,9 +909,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			};
 			const allGreetings = [getTimeGreeting(), ...greetings];
 			setGreeting(allGreetings[Math.floor(Math.random() * allGreetings.length)]);
-		}, []);
-
-		useEffect(() => {
 			const shuffled = [...PROMPT_SUGGESTIONS].sort(() => 0.5 - Math.random());
 			setVisiblePrompts(shuffled.slice(0, 7));
 		}, []);
@@ -1683,7 +1688,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						`/api/web-sessions/${sessionId}`,
 					);
 					if (!response.ok) {
-						throw new Error("Failed to load session");
+						console.warn(`Session ${sessionId} not found (${response.status}), starting fresh.`);
+						setMessages([]);
+						setLoadingSession(false);
+						return;
 					}
 
 					const data = await response.json();
@@ -2059,7 +2067,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						)}
 					</div>
 					<div className="flex items-center gap-1.5">
-						{isStreaming && (
+						{isStreaming ? (
 							<button
 								type="button"
 								onClick={() => handleStop()}
@@ -2070,25 +2078,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								<svg width="8" height="8" viewBox="0 0 10 10" fill="currentColor">
 									<rect width="10" height="10" rx="1.5" />
 								</svg>
-							</button>
-						)}
-						{isStreaming ? (
-							<button
-								type="button"
-								onClick={() => editorRef.current?.submit()}
-								disabled={(editorEmpty && attachedFiles.length === 0) || loadingSession}
-								className="h-7 px-3 rounded-full flex items-center gap-1.5 text-[12px] font-medium disabled:opacity-40 disabled:cursor-not-allowed"
-								style={{
-									background: !editorEmpty || attachedFiles.length > 0 ? "var(--color-accent)" : "var(--color-surface-hover)",
-									color: !editorEmpty || attachedFiles.length > 0 ? "white" : "var(--color-text-muted)",
-								}}
-								title="Add to queue"
-							>
-								<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-									<polyline points="9 10 4 15 9 20" />
-									<path d="M20 4v7a4 4 0 0 1-4 4H4" />
-								</svg>
-								Queue
 							</button>
 						) : (
 							<button
@@ -2116,7 +2105,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const inputBarContainer = (onDragOverHandler: React.DragEventHandler, onDragLeaveHandler: React.DragEventHandler, onDropHandler: React.DragEventHandler) => (
 			<div
 				data-chat-drop-target=""
-				className="rounded-3xl overflow-hidden border shadow-[0_0_32px_rgba(0,0,0,0.07)] transition-[outline,box-shadow] duration-150 ease-out data-drag-hover:outline-2 data-drag-hover:outline-dashed data-drag-hover:outline-(--color-accent) data-drag-hover:-outline-offset-2 data-drag-hover:shadow-[0_0_0_4px_color-mix(in_srgb,var(--color-accent)_15%,transparent),0_0_32px_rgba(0,0,0,0.07)]!"
+				className={`${compact ? "rounded-2xl" : "rounded-3xl"} overflow-hidden border shadow-[0_0_32px_rgba(0,0,0,0.07)] transition-[outline,box-shadow,border-color] duration-150 ease-out focus-within:border-[var(--color-border-strong)]! data-drag-hover:outline-2 data-drag-hover:outline-dashed data-drag-hover:outline-(--color-accent) data-drag-hover:-outline-offset-2 data-drag-hover:shadow-[0_0_0_4px_color-mix(in_srgb,var(--color-accent)_15%,transparent),0_0_32px_rgba(0,0,0,0.07)]!`}
 				style={{
 					background: "var(--color-surface)",
 					borderColor: "var(--color-border)",
@@ -2169,7 +2158,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		// ── Render ──
 
 		return (
-			<LayoutGroup>
 			<div
 				className="h-full flex flex-col"
 				style={{ background: "var(--color-main-bg)" }}
@@ -2177,9 +2165,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				{/* Header — sticky glass bar */}
 				<header
 					className={`${compact ? "px-3 py-2" : "px-3 py-2 md:px-6 md:py-3"} flex items-center ${isSubagentMode ? "gap-3" : "justify-between"} z-20`}
-					style={{
-						background: "var(--color-bg-glass)",
-					}}
 				>
 				{isSubagentMode ? (
 					<>
@@ -2216,19 +2201,18 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							>
 								Chat: {fileContext.filename}
 							</h2>
-						) : (
+						) : currentSessionId ? (
 							<h2
 								className="text-sm font-semibold"
 								style={{
 									color: "var(--color-text)",
 								}}
 							>
-								{currentSessionId
-									? (sessionTitle || "Chat Session")
-									: "New Chat"}
+								{sessionTitle || "Chat Session"}
 							</h2>
-						)}
+						) : null}
 					</div>
+					{!hideHeaderActions && (
 					<div className="flex items-center gap-1 shrink-0">
 						{currentSessionId && onDeleteSession && (
 							<DropdownMenu>
@@ -2259,13 +2243,12 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 										onSelect={() => onDeleteSession(currentSessionId)}
 									>
 										<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></svg>
-										Delete
+										Delete this chat
 									</DropdownMenuItem>
 								</DropdownMenuContent>
 							</DropdownMenu>
 						)}
-						{compact && (
-							<button
+						<button
 								type="button"
 								onClick={() => handleNewSession()}
 								className="p-1.5 rounded-lg"
@@ -2288,8 +2271,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 									<path d="M5 12h14" />
 								</svg>
 							</button>
-						)}
 					</div>
+					)}
 					</>
 				)}
 				</header>
@@ -2337,6 +2320,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				<div
 					ref={scrollContainerRef}
 					className="flex-1 overflow-y-auto min-h-0"
+					style={{ scrollbarGutter: "stable" }}
 				>
 				{/* Messages */}
 				<div
@@ -2360,66 +2344,27 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								</p>
 							</div>
 						</div>
+					) : (showHeroState && !mounted) ? (
+						<div className="flex items-center justify-center h-full min-h-[60vh]" />
 					) : showHeroState ? (
 						<div className="flex flex-col items-center justify-center min-h-[75vh] py-12">
 							{/* Hero greeting */}
 							{greeting && (
-								<motion.h1
+								<h1
 									className="text-4xl md:text-5xl font-light tracking-normal font-instrument mb-10 text-center"
 									style={{ color: "var(--color-text)" }}
-									initial="hidden"
-									animate="visible"
-									variants={{
-										hidden: { opacity: 0 },
-										visible: {
-											opacity: 1,
-											transition: { staggerChildren: 0.12, delayChildren: 0.2 },
-										},
-									}}
 								>
-									{greeting.split(" ").map((word, i) => (
-										<motion.span
-											key={i}
-											className="inline-block mr-2"
-											variants={{
-												hidden: { opacity: 0, y: 20, filter: "blur(8px)" },
-												visible: {
-													opacity: 1,
-													y: 0,
-													filter: "blur(0px)",
-													transition: { duration: 0.8, ease: [0.2, 0.65, 0.3, 0.9] },
-												},
-											}}
-										>
-											{word}
-										</motion.span>
-									))}
-								</motion.h1>
+									{greeting}
+								</h1>
 							)}
 
 							{/* Centered input bar */}
-							<motion.div
-								className="w-full max-w-[720px] mx-auto px-4"
-								initial={{ opacity: 0, y: 20 }}
-								animate={{ opacity: 1, y: 0 }}
-								transition={{ duration: 0.8, delay: 0.8, ease: [0.22, 1, 0.36, 1] }}
-							>
-								<motion.div
-									layout
-									layoutId="chat-input-bar"
-									transition={{ type: "spring", stiffness: 260, damping: 30 }}
-								>
-									{inputBarContainer(handleInputDragOver, handleInputDragLeave, handleInputDrop)}
-								</motion.div>
-							</motion.div>
+							<div className="w-full max-w-[720px] mx-auto px-4">
+								{inputBarContainer(handleInputDragOver, handleInputDragLeave, handleInputDrop)}
+							</div>
 
 							{/* Prompt suggestion pills */}
-							<motion.div
-								className="mt-6 flex flex-col gap-2.5 w-full max-w-[720px] mx-auto px-4"
-								initial={{ opacity: 0, y: 10 }}
-								animate={{ opacity: 1, y: 0 }}
-								transition={{ duration: 0.5, delay: 1.0, ease: [0.22, 1, 0.36, 1] }}
-							>
+							<div className="mt-6 flex flex-col gap-2.5 w-full max-w-[720px] mx-auto px-4">
 								<div className="flex items-center justify-center gap-2 flex-wrap">
 									{visiblePrompts.slice(0, 3).map((template) => {
 										const Icon = template.icon;
@@ -2462,7 +2407,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 										);
 									})}
 								</div>
-							</motion.div>
+							</div>
 						</div>
 					) : messages.length === 0 ? (
 						<div className="flex items-center justify-center h-full min-h-[60vh]">
@@ -2560,13 +2505,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						style={{ background: "var(--color-bg-glass)" }}
 					>
 						<div className={compact ? "" : "max-w-[720px] mx-auto"}>
-							<motion.div
-								layout
-								layoutId="chat-input-bar"
-								transition={{ type: "spring", stiffness: 260, damping: 30 }}
-							>
-								{inputBarContainer(handleInputDragOver, handleInputDragLeave, handleInputDrop)}
-							</motion.div>
+							{inputBarContainer(handleInputDragOver, handleInputDragLeave, handleInputDrop)}
 						</div>
 					</div>
 				)}
@@ -2583,7 +2522,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				)}
 
 			</div>
-			</LayoutGroup>
 		);
 	},
 );

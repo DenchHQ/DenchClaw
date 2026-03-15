@@ -1,4 +1,8 @@
 @import "tailwindcss";
+@import "@sinm/react-chrome-tabs/css/chrome-tabs.css";
+@import "@sinm/react-chrome-tabs/css/chrome-tabs-dark-theme.css";
+
+@custom-variant dark (&:is(.dark *));
 
 /* ============================================================
    Theme System — Light (default) & Dark (.dark)
@@ -8,9 +12,9 @@
   /* Background / Surface */
   --color-bg: #f5f5f4;
   --color-surface: #ffffff;
-  --color-sidebar-bg: #ffffff;
-  --color-main-bg: rgba(250, 250, 249, 0.5);
-  --color-surface-hover: #f5f4f1;
+  --color-sidebar-bg: #f5f5f4;
+  --color-main-bg: #fafaf9;
+  --color-surface-hover: #ececea;
   --color-surface-raised: #ffffff;
 
   /* Borders */
@@ -22,10 +26,10 @@
   --color-text-secondary: #44443e;
   --color-text-muted: #8a8a82;
 
-  /* Accent (blue) */
-  --color-accent: rgba(37, 99, 235, 0.9);
-  --color-accent-hover: #1d4ed8;
-  --color-accent-light: rgba(37, 99, 235, 0.08);
+  /* Accent */
+  --color-accent: #4FA1EE;
+  --color-accent-hover: #3B8FDE;
+  --color-accent-light: rgba(79, 161, 238, 0.08);
 
   /* Chat */
   --color-user-bubble: #eae8e4;
@@ -70,6 +74,28 @@
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.06);
   --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.08);
   --shadow-xl: 0 8px 32px rgba(0, 0, 0, 0.1);
+
+  /* Dench UI tokens (used by @denchhq/ui-react primitives) */
+  --background: 0 0% 90%;
+  --foreground: 0 0% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 3.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 3.9%;
+  --primary: 0 0% 9%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 0 0% 96.1%;
+  --secondary-foreground: 0 0% 9%;
+  --muted: 0 0% 96.1%;
+  --muted-foreground: 0 0% 45.1%;
+  --accent: 0 0% 96.1%;
+  --accent-foreground: 0 0% 9%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 0 0% 89.8%;
+  --input: 0 0% 89.8%;
+  --ring: 0 0% 3.9%;
+  --radius: 0.5rem;
 }
 
 .dark {
@@ -90,10 +116,10 @@
   --color-text-secondary: #b8b8b0;
   --color-text-muted: #78776f;
 
-  /* Accent (blue, brighter for dark) */
-  --color-accent: #3b82f6;
-  --color-accent-hover: #60a5fa;
-  --color-accent-light: rgba(59, 130, 246, 0.12);
+  /* Accent */
+  --color-accent: #4FA1EE;
+  --color-accent-hover: #6BB3F5;
+  --color-accent-light: rgba(79, 161, 238, 0.12);
 
   /* Chat */
   --color-user-bubble: #1e1e1c;
@@ -138,6 +164,28 @@
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.4);
   --shadow-xl: 0 8px 32px rgba(0, 0, 0, 0.5);
+
+  /* Dench UI tokens (used by @denchhq/ui-react primitives) */
+  --background: 0 0% 3.9%;
+  --foreground: 0 0% 98%;
+  --card: 0 0% 3.9%;
+  --card-foreground: 0 0% 98%;
+  --popover: 0 0% 3.9%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 0 0% 9%;
+  --secondary: 0 0% 14.9%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 0 0% 14.9%;
+  --muted-foreground: 0 0% 63.9%;
+  --accent: 0 0% 14.9%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 0 0% 14.9%;
+  --input: 0 0% 14.9%;
+  --ring: 0 0% 83.1%;
+  --radius: 0.5rem;
 }
 
 /* Disable iframe pointer events during sidebar resize so the
@@ -224,6 +272,9 @@ body {
 .chat-user-html-content p:empty {
   min-height: 1em;
 }
+.chat-user-html-content p:empty:last-child {
+  display: none;
+}
 .chat-user-html-content strong {
   font-weight: 700;
 }
@@ -276,6 +327,17 @@ a,
     background-color, border-color, color, box-shadow, opacity;
   transition-duration: 0.15s;
   transition-timing-function: ease;
+}
+
+/* Restore pointer cursor for interactive elements (Tailwind v4 preflight resets to default) */
+button:not(:disabled),
+[type="button"]:not(:disabled),
+[role="button"]:not(:disabled),
+a[href],
+select:not(:disabled),
+summary,
+label {
+  cursor: pointer !important;
 }
 
 /* ============================================================
@@ -1866,4 +1928,80 @@ body {
 .spreadsheet-editor-grid .Spreadsheet__data-viewer,
 .spreadsheet-editor-grid .Spreadsheet__data-editor input {
   padding: 4px 8px;
+}
+
+/* ── @sinm/react-chrome-tabs theme overrides ── */
+.dench-chrome-tabs-wrapper {
+  background: var(--color-bg);
+  min-height: 36px;
+}
+.dench-chrome-tabs-wrapper .chrome-tabs {
+  background: var(--color-bg);
+  height: 36px;
+  padding: 2px 3px 0 3px;
+  border-radius: 0;
+  font-family: inherit;
+}
+.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab {
+  height: 34px;
+  cursor: default;
+}
+.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab .chrome-tab-background > svg .chrome-tab-geometry {
+  fill: var(--color-bg);
+}
+.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab[active] .chrome-tab-background > svg .chrome-tab-geometry {
+  fill: var(--color-surface);
+}
+.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab .chrome-tab-title {
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+}
+.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab[active] .chrome-tab-title {
+  color: var(--color-text);
+}
+.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab .chrome-tab-dividers::before,
+.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab .chrome-tab-dividers::after {
+  background: var(--color-border);
+}
+.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tabs-bottom-bar {
+  background: var(--color-surface);
+  height: 1px;
+}
+.dench-chrome-tabs-wrapper .chrome-tabs-optional-shadow-below-bottom-bar {
+  display: none;
+}
+
+/* Favicon icon classes (SVG data-uri with currentColor replaced by hex) */
+.dench-favicon-home,
+.dench-favicon-chat,
+.dench-favicon-file,
+.dench-favicon-app,
+.dench-favicon-cron,
+.dench-favicon-object {
+  background-size: 14px 14px !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
+  opacity: 0.55;
+}
+.dench-favicon-home {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/%3E%3Cpolyline points='9 22 9 12 15 12 15 22'/%3E%3C/svg%3E") !important;
+}
+.dench-favicon-chat {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/%3E%3C/svg%3E") !important;
+}
+.dench-favicon-file {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'/%3E%3Cpath d='M14 2v4a2 2 0 0 0 2 2h4'/%3E%3C/svg%3E") !important;
+}
+body.resizing .sidebar-animate {
+  transition: none !important;
+}
+
+.dench-favicon-app {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='7' height='7' x='3' y='3' rx='1'/%3E%3Crect width='7' height='7' x='14' y='3' rx='1'/%3E%3Crect width='7' height='7' x='3' y='14' rx='1'/%3E%3Crect width='7' height='7' x='14' y='14' rx='1'/%3E%3C/svg%3E") !important;
+}
+.dench-favicon-cron {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpolyline points='12 6 12 12 16 14'/%3E%3C/svg%3E") !important;
+}
+.dench-favicon-object {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2'/%3E%3Cpath d='M3 9h18'/%3E%3Cpath d='M9 21V9'/%3E%3C/svg%3E") !important;
 }

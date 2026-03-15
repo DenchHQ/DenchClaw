@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Suspense } from "react";
+import { ThemeProvider } from "next-themes";
 import { getOrCreateAnonymousId } from "@/lib/telemetry";
 import { PostHogProvider } from "./components/posthog-provider";
 import "./globals.css";
@@ -38,19 +39,15 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500;600;700&display=swap"
           rel="stylesheet"
         />
-        {/* Inline script to prevent FOUC — reads localStorage or system preference */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `try{if(localStorage.theme==="dark"||(!("theme" in localStorage)&&window.matchMedia("(prefers-color-scheme: dark)").matches)){document.documentElement.classList.add("dark")}else{document.documentElement.classList.remove("dark")}}catch(e){}`,
-          }}
-        />
       </head>
       <body className="antialiased">
-        <Suspense fallback={null}>
-          <PostHogProvider anonymousId={anonymousId}>
-            {children}
-          </PostHogProvider>
-        </Suspense>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          <Suspense fallback={null}>
+            <PostHogProvider anonymousId={anonymousId}>
+              {children}
+            </PostHogProvider>
+          </Suspense>
+        </ThemeProvider>
       </body>
     </html>
   );

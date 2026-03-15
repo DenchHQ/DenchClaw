@@ -372,7 +372,7 @@ export function DatabaseViewer({ dbPath, filename }: DatabaseViewerProps) {
       <div className="flex items-center justify-center h-full gap-3">
         <div
           className="w-5 h-5 border-2 rounded-full animate-spin"
-          style={{ borderColor: "var(--color-border)", borderTopColor: "var(--color-accent)" }}
+          style={{ borderRightColor: "var(--color-border)", borderBottomColor: "var(--color-border)", borderLeftColor: "var(--color-border)", borderTopColor: "var(--color-accent)" }}
         />
         <span className="text-sm" style={{ color: "var(--color-text-muted)" }}>
           Loading database...
@@ -651,7 +651,7 @@ function TableDataPanel({
           <div className="flex items-center justify-center h-32">
             <div
               className="w-5 h-5 border-2 rounded-full animate-spin"
-              style={{ borderColor: "var(--color-border)", borderTopColor: "var(--color-accent)" }}
+              style={{ borderRightColor: "var(--color-border)", borderBottomColor: "var(--color-border)", borderLeftColor: "var(--color-border)", borderTopColor: "var(--color-accent)" }}
             />
           </div>
         ) : data.length === 0 ? (
@@ -779,7 +779,7 @@ function QueryPanel({
             {queryRunning ? (
               <div
                 className="w-3.5 h-3.5 border-2 rounded-full animate-spin"
-                style={{ borderColor: "rgba(255,255,255,0.3)", borderTopColor: "white" }}
+                style={{ borderRightColor: "rgba(255,255,255,0.3)", borderBottomColor: "rgba(255,255,255,0.3)", borderLeftColor: "rgba(255,255,255,0.3)", borderTopColor: "white" }}
               />
             ) : (
               <PlayIcon />

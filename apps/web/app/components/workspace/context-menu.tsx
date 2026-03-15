@@ -160,14 +160,10 @@ export function ContextMenu({ x, y, target, onAction, onClose }: ContextMenuProp
   return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-[9999] min-w-[200px] py-1 rounded-lg shadow-xl border"
+      className="fixed z-[9999] min-w-[200px] p-1 rounded-2xl bg-neutral-100/[0.67] dark:bg-neutral-900/[0.67] border border-white dark:border-white/10 backdrop-blur-md shadow-[0_0_25px_0_rgba(0,0,0,0.16)]"
       style={{
         left: x,
         top: y,
-        background: "var(--color-surface)",
-        borderColor: "var(--color-border)",
-        backdropFilter: "blur(20px)",
-        WebkitBackdropFilter: "blur(20px)",
         animation: "contextMenuFadeIn 100ms ease-out",
       }}
       role="menu"
@@ -188,8 +184,7 @@ export function ContextMenu({ x, y, target, onAction, onClose }: ContextMenuProp
           return (
             <div
               key={`sep-${i}`}
-              className="my-1 mx-2 border-t"
-              style={{ borderColor: "var(--color-border)" }}
+              className="my-0.5 mx-1 h-px bg-neutral-400/15"
             />
           );
         }
@@ -203,25 +198,13 @@ export function ContextMenu({ x, y, target, onAction, onClose }: ContextMenuProp
             type="button"
             role="menuitem"
             disabled={isDisabled}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-left transition-colors"
+            className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-[13px] text-left rounded-xl transition-all ${isDisabled ? "opacity-50" : "hover:bg-neutral-400/15"}`}
             style={{
               color: isDisabled
                 ? "var(--color-text-muted)"
                 : menuItem.danger
-                  ? "#ef4444"
+                  ? "var(--color-error)"
                   : "var(--color-text)",
-              opacity: isDisabled ? 0.5 : 1,
-              cursor: isDisabled ? "default" : "pointer",
-            }}
-            onMouseEnter={(e) => {
-              if (!isDisabled) {
-                (e.currentTarget as HTMLElement).style.background = menuItem.danger
-                  ? "rgba(239, 68, 68, 0.1)"
-                  : "var(--color-surface-hover)";
-              }
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.background = "transparent";
             }}
             onClick={() => handleItemClick(menuItem.action, isDisabled)}
           >

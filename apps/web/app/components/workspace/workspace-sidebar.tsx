@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import { useTheme } from "next-themes";
 import { FileManagerTree, type TreeNode } from "./file-manager-tree";
 import { ProfileSwitcher } from "./profile-switcher";
 import { CreateWorkspaceDialog } from "./create-workspace-dialog";
 import { UnicodeSpinner } from "../unicode-spinner";
+import { ChatSessionsSidebar, type WebSession, type SidebarSubagentInfo } from "./chat-sessions-sidebar";
 
 /** Shape returned by /api/workspace/suggest-files */
 type SuggestItem = {
@@ -52,6 +54,22 @@ type WorkspaceSidebarProps = {
   activeWorkspace?: string | null;
   /** Called after workspace switches or workspace creation so parent can refresh state. */
   onWorkspaceChanged?: () => void;
+  /** Chat sessions for the Chats tab. */
+  chatSessions?: WebSession[];
+  activeChatSessionId?: string | null;
+  activeChatSessionTitle?: string;
+  chatStreamingSessionIds?: Set<string>;
+  chatSubagents?: SidebarSubagentInfo[];
+  chatActiveSubagentKey?: string | null;
+  chatSessionsLoading?: boolean;
+  onSelectChatSession?: (sessionId: string) => void;
+  onNewChatSession?: () => void;
+  onSelectChatSubagent?: (sessionKey: string) => void;
+  onDeleteChatSession?: (sessionId: string) => void;
+  onRenameChatSession?: (sessionId: string, newTitle: string) => void;
+  /** Which tab is active. Controlled from parent if provided. */
+  activeTab?: "files" | "chats";
+  onTabChange?: (tab: "files" | "chats") => void;
 };
 
 function HomeIcon() {
@@ -88,66 +106,32 @@ function FolderOpenIcon() {
 /* ─── Theme toggle ─── */
 
 function ThemeToggle() {
-	const [isDark, setIsDark] = useState(false);
+	const { resolvedTheme, setTheme } = useTheme();
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
 
-	useEffect(() => {
-		setIsDark(document.documentElement.classList.contains("dark"));
-	}, []);
+	if (!mounted) return <div className="w-[28px] h-[28px]" />;
 
-	const toggle = () => {
-		const next = !isDark;
-		setIsDark(next);
-		if (next) {
-			document.documentElement.classList.add("dark");
-			localStorage.setItem("theme", "dark");
-		} else {
-			document.documentElement.classList.remove("dark");
-			localStorage.setItem("theme", "light");
-		}
-	};
+	const isDark = resolvedTheme === "dark";
 
 	return (
 		<button
 			type="button"
-			onClick={toggle}
+			onClick={() => setTheme(isDark ? "light" : "dark")}
 			className="p-1.5 rounded-lg"
 			style={{ color: "var(--color-text-muted)" }}
 			title={isDark ? "Switch to light mode" : "Switch to dark mode"}
 		>
 			{isDark ? (
-				/* Sun icon */
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="2"
-					strokeLinecap="round"
-					strokeLinejoin="round"
-				>
+				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
 					<circle cx="12" cy="12" r="4" />
-					<path d="M12 2v2" />
-					<path d="M12 20v2" />
-					<path d="m4.93 4.93 1.41 1.41" />
-					<path d="m17.66 17.66 1.41 1.41" />
-					<path d="M2 12h2" />
-					<path d="M20 12h2" />
-					<path d="m6.34 17.66-1.41 1.41" />
-					<path d="m19.07 4.93-1.41 1.41" />
+					<path d="M12 2v2" /><path d="M12 20v2" />
+					<path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" />
+					<path d="M2 12h2" /><path d="M20 12h2" />
+					<path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" />
 				</svg>
 			) : (
-				/* Moon icon */
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="2"
-					strokeLinecap="round"
-					strokeLinejoin="round"
-				>
+				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
 					<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
 				</svg>
 			)}
@@ -412,10 +396,31 @@ export function WorkspaceSidebar({
 	onCollapse,
   activeWorkspace,
   onWorkspaceChanged,
+  chatSessions,
+  activeChatSessionId,
+  activeChatSessionTitle,
+  chatStreamingSessionIds,
+  chatSubagents,
+  chatActiveSubagentKey,
+  chatSessionsLoading,
+  onSelectChatSession,
+  onNewChatSession,
+  onSelectChatSubagent,
+  onDeleteChatSession,
+  onRenameChatSession,
+  activeTab: activeTabProp,
+  onTabChange,
 }: WorkspaceSidebarProps) {
 	const isBrowsing = browseDir != null;
 	const width = mobile ? "280px" : (widthProp ?? 260);
 	const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
+	const hasChatProps = chatSessions !== undefined;
+	const [internalTab, setInternalTab] = useState<"files" | "chats">(activeTabProp ?? "files");
+	const currentTab = activeTabProp ?? internalTab;
+	const setTab = useCallback((tab: "files" | "chats") => {
+		setInternalTab(tab);
+		onTabChange?.(tab);
+	}, [onTabChange]);
 
 	const sidebar = (
 		<aside
@@ -429,44 +434,31 @@ export function WorkspaceSidebar({
 		>
 			{/* Header */}
 			<div
-				className="flex items-center gap-2 px-3 py-2.5 border-b"
+				className="flex items-center gap-2 px-3 h-[36px] border-b"
 				style={{ borderColor: "var(--color-border)" }}
 			>
 				{isBrowsing ? (
 					<>
-						<span
-							className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-							style={{
-								background: "var(--color-surface-hover)",
-								color: "var(--color-text-muted)",
-							}}
-						>
-							<FolderOpenIcon />
-						</span>
-						<div className="flex-1 min-w-0">
-							<div
-								className="text-sm font-medium truncate"
+						<div className="flex-1 min-w-0 flex items-center gap-1.5">
+							<span
+								className="shrink-0"
+								style={{ color: "var(--color-text-muted)" }}
+							>
+								<FolderOpenIcon />
+							</span>
+							<span
+								className="text-[12px] font-medium truncate"
 								style={{ color: "var(--color-text)" }}
 								title={browseDir}
 							>
 								{dirDisplayName(browseDir)}
-							</div>
-							<div
-								className="text-[11px] truncate"
-								style={{
-									color: "var(--color-text-muted)",
-								}}
-								title={browseDir}
-							>
-								{browseDir}
-							</div>
+							</span>
 						</div>
-						{/* Home button to return to workspace */}
 						{onGoHome && (
 							<button
 								type="button"
 								onClick={onGoHome}
-								className="p-1.5 rounded-lg flex-shrink-0"
+								className="p-1 rounded-md shrink-0 transition-colors hover:bg-stone-200 dark:hover:bg-stone-700"
 								style={{ color: "var(--color-text-muted)" }}
 								title="Return to workspace"
 							>
@@ -476,66 +468,48 @@ export function WorkspaceSidebar({
 					</>
 				) : (
 					<>
-						<button
-							type="button"
-							onClick={() => void onGoToChat?.()}
-							className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 cursor-pointer transition-colors hover:bg-stone-200 dark:hover:bg-stone-700"
-							style={{
-								background: "transparent",
-								color: "var(--color-text-muted)",
-							}}
-							title="All Chats"
-						>
-							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-								<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-								<polyline points="9 22 9 12 15 12 15 22" />
-							</svg>
-						</button>
-						<div className="flex-1 min-w-0 px-1.5">
-							<div className="text-[13px] font-semibold truncate text-stone-700 dark:text-stone-200">
-								{orgName || "Workspace"}
-							</div>
-							<div className="mt-1">
-								<ProfileSwitcher
-									activeWorkspaceHint={activeWorkspace ?? null}
-									onWorkspaceSwitch={() => {
-										onWorkspaceChanged?.();
-									}}
-									onWorkspaceDelete={() => {
-										onWorkspaceChanged?.();
-									}}
-									onCreateWorkspace={() => {
-										setCreateWorkspaceOpen(true);
-									}}
-									trigger={({ onClick, activeWorkspace: workspaceName, switching }) => (
-										<button
-											type="button"
-											onClick={onClick}
-											disabled={switching}
-											className="text-[11px] flex items-center gap-1 truncate w-full transition-colors"
+						<div className="flex-1 min-w-0">
+							<ProfileSwitcher
+								activeWorkspaceHint={activeWorkspace ?? null}
+								onWorkspaceSwitch={() => {
+									onWorkspaceChanged?.();
+								}}
+								onWorkspaceDelete={() => {
+									onWorkspaceChanged?.();
+								}}
+								onCreateWorkspace={() => {
+									setCreateWorkspaceOpen(true);
+								}}
+								trigger={({ onClick, activeWorkspace: workspaceName, switching }) => (
+									<button
+										type="button"
+										onClick={onClick}
+										disabled={switching}
+										className="text-[12px] flex items-center gap-1.5 truncate w-full transition-colors font-medium rounded-md px-1.5 py-1 -mx-1.5 hover:bg-stone-200/60 dark:hover:bg-stone-700/60"
+										style={{ color: "var(--color-text)" }}
+										title="Switch workspace"
+									>
+										<span className="truncate">{orgName || "Workspace"}</span>
+										<span className="px-1 py-px rounded text-[10px] leading-tight shrink-0 bg-stone-200 text-stone-600 dark:bg-stone-700 dark:text-stone-300">
+											{workspaceName || "-"}
+										</span>
+										<svg
+											width="10"
+											height="10"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											strokeWidth="2"
+											strokeLinecap="round"
+											strokeLinejoin="round"
+											className="shrink-0"
 											style={{ color: "var(--color-text-muted)" }}
-											title="Switch workspace"
 										>
-											<span>Workspace</span>
-											<span className="px-1 py-0.5 rounded text-[10px] shrink-0 bg-stone-200 text-stone-600 dark:bg-stone-700 dark:text-stone-300">
-												{workspaceName || "-"}
-											</span>
-											<svg
-												width="10"
-												height="10"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="currentColor"
-												strokeWidth="2"
-												strokeLinecap="round"
-												strokeLinejoin="round"
-											>
-												<path d="m6 9 6 6 6-6" />
-											</svg>
-										</button>
-									)}
-								/>
-							</div>
+											<path d="m6 9 6 6 6-6" />
+										</svg>
+									</button>
+								)}
+							/>
 						</div>
 					</>
 				)}
@@ -555,12 +529,10 @@ export function WorkspaceSidebar({
 				)}
 			</div>
 
-			{/* File search */}
 			{onFileSearchSelect && (
 				<FileSearch onSelect={onFileSearchSelect} />
 			)}
 
-			{/* Tree */}
 			<div className="flex-1 overflow-y-auto px-1">
 				{loading ? (
 					<div className="flex items-center justify-center py-12">
@@ -571,17 +543,17 @@ export function WorkspaceSidebar({
 						/>
 					</div>
 				) : (
-			<FileManagerTree
-				tree={tree}
-				activePath={activePath}
-				onSelect={onSelect}
-				onRefresh={onRefresh}
-				parentDir={parentDir}
-				onNavigateUp={onNavigateUp}
-				browseDir={browseDir}
-				workspaceRoot={workspaceRoot}
-				onExternalDrop={onExternalDrop}
-			/>
+					<FileManagerTree
+						tree={tree}
+						activePath={activePath}
+						onSelect={onSelect}
+						onRefresh={onRefresh}
+						parentDir={parentDir}
+						onNavigateUp={onNavigateUp}
+						browseDir={browseDir}
+						workspaceRoot={workspaceRoot}
+						onExternalDrop={onExternalDrop}
+					/>
 				)}
 			</div>
 

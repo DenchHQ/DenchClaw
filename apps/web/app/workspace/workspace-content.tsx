@@ -23,7 +23,6 @@ import { MediaViewer, detectMediaType, type MediaType } from "../components/work
 import { DatabaseViewer, DuckDBMissing } from "../components/workspace/database-viewer";
 import { RichDocumentEditor, isDocxFile, isTxtFile, textToHtml } from "../components/workspace/rich-document-editor";
 import { Breadcrumbs } from "../components/workspace/breadcrumbs";
-import { ChatSessionsSidebar } from "../components/workspace/chat-sessions-sidebar";
 import { EmptyState } from "../components/workspace/empty-state";
 import { ReportViewer } from "../components/charts/report-viewer";
 import { ChatPanel, type ChatPanelHandle, type SubagentSpawnInfo } from "../components/chat-panel";
@@ -44,6 +43,13 @@ import {
   autoDetectViewField,
 } from "@/lib/object-filters";
 import { UnicodeSpinner } from "../components/unicode-spinner";
+import { ChatSessionsSidebar } from "../components/workspace/chat-sessions-sidebar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
 import { resolveActiveViewSyncDecision } from "./object-view-active-view";
 import { resetWorkspaceStateOnSwitch } from "./workspace-switch";
 import { TabBar } from "../components/workspace/tab-bar";
@@ -53,7 +59,7 @@ import {
   generateTabId, loadTabs, saveTabs, openTab, closeTab,
   closeOtherTabs, closeTabsToRight, closeAllTabs,
   activateTab, reorderTabs, togglePinTab,
-  inferTabType, inferTabTitle,
+  inferTabType, inferTabTitle, updateTabTitle,
 } from "@/lib/tab-state";
 import dynamic from "next/dynamic";
 
@@ -216,8 +222,11 @@ const LEFT_SIDEBAR_MIN = 200;
 const LEFT_SIDEBAR_MAX = 480;
 const RIGHT_SIDEBAR_MIN = 260;
 const RIGHT_SIDEBAR_MAX = 900;
+const CHAT_SIDEBAR_MIN = 220;
+const CHAT_SIDEBAR_MAX = 480;
 const STORAGE_LEFT = "dench-workspace-left-sidebar-width";
 const STORAGE_RIGHT = "dench-workspace-right-sidebar-width";
+const STORAGE_CHAT_SIDEBAR = "dench-workspace-chat-sidebar-width";
 
 function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
@@ -499,11 +508,11 @@ function WorkspacePageInner() {
   // Mobile responsive state
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [chatSessionsOpen, setChatSessionsOpen] = useState(false);
-
   // Sidebar collapse state (desktop only).
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<"files" | "chats">("files");
+  const [chatSidebarOpen, setChatSidebarOpen] = useState(false);
 
   // Terminal drawer state
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -520,7 +529,17 @@ function WorkspacePageInner() {
     if (tabLoadedForWorkspace.current === key) return;
     tabLoadedForWorkspace.current = key;
     const loaded = loadTabs(key);
-    setTabState(loaded);
+    const hasNonHomeTabs = loaded.tabs.some((t) => t.id !== HOME_TAB_ID);
+    if (!hasNonHomeTabs) {
+      const newTab: Tab = {
+        id: generateTabId(),
+        type: "chat",
+        title: "New Chat",
+      };
+      setTabState(openTab(loaded, newTab));
+    } else {
+      setTabState(loaded);
+    }
   }, [workspaceName]);
 
   // Persist tabs to localStorage on change (only after initial load for this workspace)
@@ -547,6 +566,7 @@ function WorkspacePageInner() {
   // Use static defaults so server and client match on first render (avoid hydration mismatch).
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(260);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(320);
+  const [chatSidebarWidth, setChatSidebarWidth] = useState(280);
   useEffect(() => {
     const left = window.localStorage.getItem(STORAGE_LEFT);
     const nLeft = left ? parseInt(left, 10) : NaN;
@@ -558,6 +578,11 @@ function WorkspacePageInner() {
     if (Number.isFinite(nRight)) {
       setRightSidebarWidth(clamp(nRight, RIGHT_SIDEBAR_MIN, RIGHT_SIDEBAR_MAX));
     }
+    const chat = window.localStorage.getItem(STORAGE_CHAT_SIDEBAR);
+    const nChat = chat ? parseInt(chat, 10) : NaN;
+    if (Number.isFinite(nChat)) {
+      setChatSidebarWidth(clamp(nChat, CHAT_SIDEBAR_MIN, CHAT_SIDEBAR_MAX));
+    }
   }, []);
   useEffect(() => {
     window.localStorage.setItem(STORAGE_LEFT, String(leftSidebarWidth));
@@ -565,6 +590,9 @@ function WorkspacePageInner() {
   useEffect(() => {
     window.localStorage.setItem(STORAGE_RIGHT, String(rightSidebarWidth));
   }, [rightSidebarWidth]);
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_CHAT_SIDEBAR, String(chatSidebarWidth));
+  }, [chatSidebarWidth]);
 
   // Keyboard shortcuts: Cmd+B = toggle left sidebar, Cmd+Shift+B = toggle right sidebar, Cmd+J = toggle terminal
   useEffect(() => {
@@ -960,10 +988,27 @@ function WorkspacePageInner() {
       setTabState((prev) => activateTab(prev, tabId));
       return;
     }
+    let tab: Tab | undefined;
     setTabState((prev) => {
       const next = activateTab(prev, tabId);
-      const tab = next.tabs.find((t) => t.id === tabId);
-      if (tab?.path) {
+      tab = next.tabs.find((t) => t.id === tabId);
+      return next;
+    });
+    requestAnimationFrame(() => {
+      if (!tab) return;
+      if (tab.type === "chat") {
+        setActivePath(null);
+        setContent({ kind: "none" });
+        if (tab.sessionId) {
+          setActiveSessionId(tab.sessionId);
+          setActiveSubagentKey(null);
+          void chatRef.current?.loadSession(tab.sessionId);
+        } else {
+          setActiveSessionId(null);
+          setActiveSubagentKey(null);
+          void chatRef.current?.newSession();
+        }
+      } else if (tab.path) {
         const node = resolveNode(tree, tab.path);
         if (node) {
           void loadContent(node);
@@ -977,30 +1022,54 @@ function WorkspacePageInner() {
           if (job) setContent({ kind: "cron-job", jobId, job });
         }
       }
-      return next;
     });
   }, [tree, loadContent, cronJobs]);
 
   const handleTabClose = useCallback((tabId: string) => {
-    setTabState((prev) => {
-      const next = closeTab(prev, tabId);
-      if (next.activeTabId !== prev.activeTabId) {
-        if (next.activeTabId === HOME_TAB_ID || !next.activeTabId) {
-          setActivePath(null);
-          setContent({ kind: "none" });
-        } else {
-          const newActive = next.tabs.find((t) => t.id === next.activeTabId);
-          if (newActive?.path) {
-            const node = resolveNode(tree, newActive.path);
-            if (node) {
-              void loadContent(node);
-            }
-          }
+    const prev = tabState;
+    let next = closeTab(prev, tabId);
+    const hasNonHomeTabs = next.tabs.some((t) => t.id !== HOME_TAB_ID);
+    if (!hasNonHomeTabs) {
+      const newTab: Tab = {
+        id: generateTabId(),
+        type: "chat",
+        title: "New Chat",
+      };
+      next = openTab(next, newTab);
+      setTabState(next);
+      setActivePath(null);
+      setContent({ kind: "none" });
+      setActiveSessionId(null);
+      setActiveSubagentKey(null);
+      requestAnimationFrame(() => {
+        void chatRef.current?.newSession();
+      });
+      return;
+    }
+    setTabState(next);
+    if (next.activeTabId !== prev.activeTabId) {
+      const newActive = next.tabs.find((t) => t.id === next.activeTabId);
+      if (!newActive || newActive.id === HOME_TAB_ID) {
+        setActivePath(null);
+        setContent({ kind: "none" });
+      } else if (newActive.type === "chat") {
+        setActivePath(null);
+        setContent({ kind: "none" });
+        if (newActive.sessionId) {
+          setActiveSessionId(newActive.sessionId);
+          setActiveSubagentKey(null);
+          requestAnimationFrame(() => {
+            void chatRef.current?.loadSession(newActive.sessionId!);
+          });
+        }
+      } else if (newActive.path) {
+        const node = resolveNode(tree, newActive.path);
+        if (node) {
+          void loadContent(node);
         }
       }
-      return next;
-    });
-  }, [tree, loadContent]);
+    }
+  }, [tree, loadContent, tabState]);
 
   // Keep ref in sync so keyboard shortcut can close active tab
   useEffect(() => {
@@ -1021,10 +1090,20 @@ function WorkspacePageInner() {
 
   const handleTabCloseAll = useCallback(() => {
     setTabState((prev) => {
-      const next = closeAllTabs(prev);
+      const closed = closeAllTabs(prev);
       setActivePath(null);
       setContent({ kind: "none" });
-      return next;
+      setActiveSessionId(null);
+      setActiveSubagentKey(null);
+      const newTab: Tab = {
+        id: generateTabId(),
+        type: "chat",
+        title: "New Chat",
+      };
+      return openTab(closed, newTab);
+    });
+    requestAnimationFrame(() => {
+      void chatRef.current?.newSession();
     });
   }, []);
 
@@ -1777,6 +1856,17 @@ function WorkspacePageInner() {
     return s?.title || undefined;
   }, [activeSessionId, sessions]);
 
+  useEffect(() => {
+    if (!activeSessionTitle) return;
+    setTabState((prev) => {
+      const active = prev.tabs.find((t) => t.id === prev.activeTabId);
+      if (active?.type === "chat" && active.title !== activeSessionTitle) {
+        return updateTabTitle(prev, active.id, activeSessionTitle);
+      }
+      return prev;
+    });
+  }, [activeSessionTitle]);
+
   // Whether to show the main ChatPanel (no file/content selected)
   const showMainChat = !activePath || content.kind === "none";
 
@@ -1810,377 +1900,429 @@ function WorkspacePageInner() {
             onToggleHidden={() => setShowHidden((v) => !v)}
             activeWorkspace={workspaceName}
             onWorkspaceChanged={handleWorkspaceChanged}
+            chatSessions={sessions}
+            activeChatSessionId={activeSessionId}
+            activeChatSessionTitle={activeSessionTitle}
+            chatStreamingSessionIds={streamingSessionIds}
+            chatSubagents={subagents}
+            chatActiveSubagentKey={activeSubagentKey}
+            chatSessionsLoading={sessionsLoading}
+            onSelectChatSession={(sessionId) => {
+              setActiveSessionId(sessionId);
+              setActiveSubagentKey(null);
+              void chatRef.current?.loadSession(sessionId);
+              setSidebarOpen(false);
+            }}
+            onNewChatSession={() => {
+              setActiveSessionId(null);
+              setActiveSubagentKey(null);
+              void chatRef.current?.newSession();
+              setSidebarOpen(false);
+            }}
+            onSelectChatSubagent={handleSelectSubagent}
+            onDeleteChatSession={handleDeleteSession}
+            onRenameChatSession={handleRenameSession}
+            activeTab={sidebarTab}
+            onTabChange={setSidebarTab}
             mobile
             onClose={() => setSidebarOpen(false)}
           />
         )
       ) : (
-        <>
-          {!leftSidebarCollapsed && (
           <div
-            className="flex shrink-0 flex-col relative"
-            style={{ width: leftSidebarWidth, minWidth: leftSidebarWidth }}
+            className="sidebar-animate flex shrink-0 flex-col relative overflow-hidden"
+            style={{
+              width: leftSidebarCollapsed ? 0 : leftSidebarWidth,
+              minWidth: leftSidebarCollapsed ? 0 : leftSidebarWidth,
+              transition: "width 200ms ease, min-width 200ms ease",
+            }}
           >
-            <ResizeHandle
-              mode="left"
-              containerRef={layoutRef}
-              min={LEFT_SIDEBAR_MIN}
-              max={LEFT_SIDEBAR_MAX}
-              onResize={setLeftSidebarWidth}
-            />
-            <WorkspaceSidebar
-              tree={enhancedTree}
-              activePath={activePath}
-              onSelect={handleNodeSelect}
-              onRefresh={refreshTree}
-              orgName={context?.organization?.name}
-              loading={treeLoading}
-              browseDir={browseDir}
-              parentDir={effectiveParentDir}
-              onNavigateUp={handleNavigateUp}
-              onGoHome={handleGoHome}
-              onFileSearchSelect={handleFileSearchSelect}
-              workspaceRoot={workspaceRoot}
-              onGoToChat={handleGoToChat}
-              onExternalDrop={handleSidebarExternalDrop}
-              showHidden={showHidden}
-              onToggleHidden={() => setShowHidden((v) => !v)}
-              width={leftSidebarWidth}
-              onCollapse={() => setLeftSidebarCollapsed(true)}
-              activeWorkspace={workspaceName}
-              onWorkspaceChanged={handleWorkspaceChanged}
-            />
+            <div className="flex flex-col h-full relative" style={{ width: leftSidebarWidth, minWidth: leftSidebarWidth }}>
+              <ResizeHandle
+                mode="left"
+                containerRef={layoutRef}
+                min={LEFT_SIDEBAR_MIN}
+                max={LEFT_SIDEBAR_MAX}
+                onResize={setLeftSidebarWidth}
+              />
+              <WorkspaceSidebar
+                tree={enhancedTree}
+                activePath={activePath}
+                onSelect={handleNodeSelect}
+                onRefresh={refreshTree}
+                orgName={context?.organization?.name}
+                loading={treeLoading}
+                browseDir={browseDir}
+                parentDir={effectiveParentDir}
+                onNavigateUp={handleNavigateUp}
+                onGoHome={handleGoHome}
+                onFileSearchSelect={handleFileSearchSelect}
+                workspaceRoot={workspaceRoot}
+                onGoToChat={handleGoToChat}
+                onExternalDrop={handleSidebarExternalDrop}
+                showHidden={showHidden}
+                onToggleHidden={() => setShowHidden((v) => !v)}
+                width={leftSidebarWidth}
+                onCollapse={() => setLeftSidebarCollapsed(true)}
+                activeWorkspace={workspaceName}
+                onWorkspaceChanged={handleWorkspaceChanged}
+                chatSessions={sessions}
+                activeChatSessionId={activeSessionId}
+                activeChatSessionTitle={activeSessionTitle}
+                chatStreamingSessionIds={streamingSessionIds}
+                chatSubagents={subagents}
+                chatActiveSubagentKey={activeSubagentKey}
+                chatSessionsLoading={sessionsLoading}
+                onSelectChatSession={(sessionId) => {
+                  setActiveSessionId(sessionId);
+                  setActiveSubagentKey(null);
+                  void chatRef.current?.loadSession(sessionId);
+                }}
+                onNewChatSession={() => {
+                  setActiveSessionId(null);
+                  setActiveSubagentKey(null);
+                  void chatRef.current?.newSession();
+                }}
+                onSelectChatSubagent={handleSelectSubagent}
+                onDeleteChatSession={handleDeleteSession}
+                onRenameChatSession={handleRenameSession}
+                activeTab={sidebarTab}
+                onTabChange={setSidebarTab}
+              />
+            </div>
           </div>
-          )}
-        </>
       )}
 
-      {/* Expand left sidebar button (shown when collapsed) */}
-      {!isMobile && leftSidebarCollapsed && (
-        <div className="shrink-0 flex flex-col items-center pt-2.5 px-1.5">
-          <button
-            type="button"
-            onClick={() => setLeftSidebarCollapsed(false)}
-            className="p-1.5 rounded-md transition-colors hover:bg-black/5"
-            style={{ color: "var(--color-text-muted)" }}
-            title="Show sidebar (⌘B)"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect width="18" height="18" x="3" y="3" rx="2" />
-              <path d="M9 3v18" />
-            </svg>
-          </button>
-        </div>
-      )}
 
       {/* Main content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden" style={{ background: "var(--color-main-bg)" }}>
-        {/* Mobile top bar — always visible on mobile */}
-        {isMobile && (
-          <div
-            className="px-3 py-2 border-b flex-shrink-0 flex items-center justify-between gap-2"
-            style={{ borderColor: "var(--color-border)", background: "var(--color-surface)" }}
-          >
-            <button
-              type="button"
-              onClick={() => setSidebarOpen(true)}
-              className="p-2 rounded-lg flex-shrink-0"
-              style={{ color: "var(--color-text-muted)" }}
-              title="Open sidebar"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="4" x2="20" y1="12" y2="12" /><line x1="4" x2="20" y1="6" y2="6" /><line x1="4" x2="20" y1="18" y2="18" />
-              </svg>
-            </button>
-            <div className="flex-1 min-w-0 text-sm font-medium truncate" style={{ color: "var(--color-text)" }}>
-              {activePath ? activePath.split("/").pop() : (context?.organization?.name || "Workspace")}
-            </div>
-            <div className="flex items-center gap-1">
-              {activePath && content.kind !== "none" && (
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden" style={{ background: "var(--color-surface)" }}>
+        <div className="flex flex-1 min-h-0">
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            {/* Mobile top bar — always visible on mobile */}
+            {isMobile && (
+              <div
+                className="px-3 py-2 border-b flex-shrink-0 flex items-center justify-between gap-2"
+                style={{ borderColor: "var(--color-border)", background: "var(--color-surface)" }}
+              >
                 <button
                   type="button"
-                  onClick={() => {
-                    setActivePath(null);
-                    setContent({ kind: "none" });
-                  }}
+                  onClick={() => setSidebarOpen(true)}
                   className="p-2 rounded-lg flex-shrink-0"
                   style={{ color: "var(--color-text-muted)" }}
-                  title="Back to chat"
+                  title="Open sidebar"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="m12 19-7-7 7-7" /><path d="M19 12H5" />
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="4" x2="20" y1="12" y2="12" /><line x1="4" x2="20" y1="6" y2="6" /><line x1="4" x2="20" y1="18" y2="18" />
                   </svg>
                 </button>
-              )}
-              {showMainChat && (
-                <button
-                  type="button"
-                  onClick={() => setChatSessionsOpen(true)}
-                  className="p-2 rounded-lg flex-shrink-0"
-                  style={{ color: "var(--color-text-muted)" }}
-                  title="Chat sessions"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                  </svg>
-                </button>
-              )}
-            </div>
-          </div>
-        )}
+                <div className="flex-1 min-w-0 text-sm font-medium truncate" style={{ color: "var(--color-text)" }}>
+                  {activePath ? activePath.split("/").pop() : (context?.organization?.name || "Workspace")}
+                </div>
+                <div className="flex items-center gap-1">
+                  {activePath && content.kind !== "none" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActivePath(null);
+                        setContent({ kind: "none" });
+                      }}
+                      className="p-2 rounded-lg flex-shrink-0"
+                      style={{ color: "var(--color-text-muted)" }}
+                      title="Back to chat"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="m12 19-7-7 7-7" /><path d="M19 12H5" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
-        {/* Tab bar (desktop only, always visible -- home tab is always present) */}
-        {!isMobile && (
-          <TabBar
-            tabs={tabState.tabs}
-            activeTabId={tabState.activeTabId}
-            onActivate={handleTabActivate}
-            onClose={handleTabClose}
-            onCloseOthers={handleTabCloseOthers}
-            onCloseToRight={handleTabCloseToRight}
-            onCloseAll={handleTabCloseAll}
-            onReorder={handleTabReorder}
-            onTogglePin={handleTabTogglePin}
-          />
-        )}
-
-        {/* When a file is selected: show top bar with breadcrumbs (desktop only, mobile has unified top bar) */}
-        {!isMobile && activePath && content.kind !== "none" && (
-          <div
-            className="px-6 border-b flex-shrink-0 flex items-center justify-between"
-            style={{ borderColor: "var(--color-border)" }}
-          >
-            <Breadcrumbs
-              path={activePath}
-              onNavigate={handleBreadcrumbNavigate}
-            />
-            <div className="flex items-center gap-1">
-              {/* Back to chat button */}
-              <button
-                type="button"
-                onClick={() => {
+            {/* Tab bar (desktop only, always visible -- home tab is always present) */}
+            {!isMobile && (
+              <TabBar
+                tabs={tabState.tabs}
+                activeTabId={tabState.activeTabId}
+                onActivate={handleTabActivate}
+                leftContent={leftSidebarCollapsed ? (
+                  <button
+                    type="button"
+                    onClick={() => setLeftSidebarCollapsed(false)}
+                    className="p-1.5 rounded-md transition-colors hover:bg-black/5 cursor-pointer"
+                    style={{ color: "var(--color-text-muted)" }}
+                    title="Show sidebar (⌘B)"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect width="18" height="18" x="3" y="3" rx="2" />
+                      <path d="M9 3v18" />
+                    </svg>
+                  </button>
+                ) : undefined}
+                onClose={handleTabClose}
+                onCloseOthers={handleTabCloseOthers}
+                onCloseToRight={handleTabCloseToRight}
+                onCloseAll={handleTabCloseAll}
+                onReorder={handleTabReorder}
+                onTogglePin={handleTabTogglePin}
+                onNewTab={() => {
+                  const newTab: Tab = {
+                    id: generateTabId(),
+                    type: "chat",
+                    title: "New Chat",
+                  };
                   setActivePath(null);
                   setContent({ kind: "none" });
+                  setActiveSessionId(null);
+                  setActiveSubagentKey(null);
+                  setTabState((prev) => openTab(prev, newTab));
+                  requestAnimationFrame(() => {
+                    void chatRef.current?.newSession();
+                  });
                 }}
-                className="p-1.5 rounded-lg flex-shrink-0"
-                style={{ color: "var(--color-text-muted)" }}
-                title="Back to chat"
+                rightContent={showMainChat ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setChatSidebarOpen((v) => !v)}
+                      className="p-1.5 rounded-lg cursor-pointer"
+                      style={{
+                        color: chatSidebarOpen ? "var(--color-text)" : "var(--color-text-muted)",
+                        background: chatSidebarOpen ? "var(--color-surface-hover)" : "transparent",
+                      }}
+                      title="Chat history"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                      </svg>
+                    </button>
+                    {activeSessionId && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          className="p-1.5 rounded-lg cursor-pointer"
+                          style={{ color: "var(--color-text-muted)" }}
+                          title="More options"
+                          aria-label="More options"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="12" r="1" /><circle cx="5" cy="12" r="1" /><circle cx="19" cy="12" r="1" />
+                          </svg>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" side="bottom">
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onSelect={() => handleDeleteSession(activeSessionId)}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></svg>
+                            Delete this chat
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </>
+                ) : undefined}
+              />
+            )}
+
+            {/* When a file is selected: show top bar with breadcrumbs (desktop only, mobile has unified top bar) */}
+            {!isMobile && activePath && content.kind !== "none" && (
+              <div
+                className="px-6 border-b flex-shrink-0 flex items-center justify-between"
+                style={{ borderColor: "var(--color-border)" }}
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="m12 19-7-7 7-7" /><path d="M19 12H5" />
-                </svg>
-              </button>
-              {/* Chat sidebar toggle (hidden for reserved/virtual paths) */}
-              {fileContext && (
-                <button
-                  type="button"
-                  onClick={() => setShowChatSidebar((v) => !v)}
-                  className="p-1.5 rounded-lg flex-shrink-0"
-                  style={{
-                    color: showChatSidebar ? "var(--color-accent)" : "var(--color-text-muted)",
-                    background: showChatSidebar ? "var(--color-accent-light)" : "transparent",
-                  }}
-                  title={showChatSidebar ? "Hide chat" : fileContext.isDirectory ? "Chat about this folder" : "Chat about this file"}
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                  </svg>
-                </button>
+                <Breadcrumbs
+                  path={activePath}
+                  onNavigate={handleBreadcrumbNavigate}
+                />
+                <div className="flex items-center gap-1">
+                  {/* Back to chat button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActivePath(null);
+                      setContent({ kind: "none" });
+                    }}
+                    className="p-1.5 rounded-lg flex-shrink-0"
+                    style={{ color: "var(--color-text-muted)" }}
+                    title="Back to chat"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="m12 19-7-7 7-7" /><path d="M19 12H5" />
+                    </svg>
+                  </button>
+                  {/* Chat sidebar toggle (hidden for reserved/virtual paths) */}
+                  {fileContext && (
+                    <button
+                      type="button"
+                      onClick={() => setShowChatSidebar((v) => !v)}
+                      className="p-1.5 rounded-lg flex-shrink-0"
+                      style={{
+                        color: showChatSidebar ? "var(--color-text)" : "var(--color-text-muted)",
+                        background: showChatSidebar ? "var(--color-surface-hover)" : "transparent",
+                      }}
+                      title={showChatSidebar ? "Hide chat" : fileContext.isDirectory ? "Chat about this folder" : "Chat about this file"}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Content area */}
+            <div className="flex-1 flex min-h-0">
+              {showMainChat ? (
+                <div className="flex-1 flex flex-col min-w-0" style={{ background: "var(--color-main-bg)" }}>
+                  <ChatPanel
+                    key={activeSubagent?.childSessionKey ?? "main"}
+                    ref={activeSubagent ? undefined : chatRef}
+                    sessionTitle={activeSessionTitle}
+                    initialSessionId={activeSessionId ?? undefined}
+                    onActiveSessionChange={activeSubagent ? undefined : (id) => {
+                      setActiveSessionId(id);
+                      setActiveSubagentKey(null);
+                      if (id) {
+                        setTabState((prev) => {
+                          const active = prev.tabs.find((t) => t.id === prev.activeTabId);
+                          if (active?.type === "chat" && !active.sessionId) {
+                            return {
+                              ...prev,
+                              tabs: prev.tabs.map((t) =>
+                                t.id === active.id ? { ...t, sessionId: id } : t,
+                              ),
+                            };
+                          }
+                          return prev;
+                        });
+                      }
+                    }}
+                    onSessionsChange={activeSubagent ? undefined : refreshSessions}
+                    onSubagentSpawned={activeSubagent ? undefined : handleSubagentSpawned}
+                    onSubagentClick={handleSubagentClickFromChat}
+                    onFilePathClick={handleFilePathClickFromChat}
+                    onDeleteSession={activeSubagent ? undefined : handleDeleteSession}
+                    onRenameSession={activeSubagent ? undefined : handleRenameSession}
+                    compact={isMobile}
+                    sessionKey={activeSubagent?.childSessionKey}
+                    subagentTask={activeSubagent?.task}
+                    subagentLabel={activeSubagent?.label}
+                    onBack={activeSubagent ? handleBackFromSubagent : undefined}
+                    hideHeaderActions={!isMobile}
+                  />
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto">
+                  <ContentRenderer
+                    content={content}
+                    workspaceExists={workspaceExists}
+                    expectedPath={workspaceRoot}
+                    tree={tree}
+                    activePath={activePath}
+                    browseDir={browseDir}
+                    treeLoading={treeLoading}
+                    members={context?.members}
+                    onNodeSelect={handleNodeSelect}
+                    onNavigateToObject={handleNavigateToObject}
+                    onRefreshObject={refreshCurrentObject}
+                    onRefreshTree={refreshTree}
+                    onNavigate={handleEditorNavigate}
+                    onOpenEntry={handleOpenEntry}
+                    searchFn={searchIndex}
+                    onSelectCronJob={handleSelectCronJob}
+                    onBackToCronDashboard={handleBackToCronDashboard}
+                    cronView={cronView}
+                    onCronViewChange={setCronView}
+                    cronCalMode={cronCalMode}
+                    onCronCalModeChange={setCronCalMode}
+                    cronDate={cronDate}
+                    onCronDateChange={setCronDate}
+                    cronRunFilter={cronRunFilter}
+                    onCronRunFilterChange={setCronRunFilter}
+                    cronRun={cronRun}
+                    onCronRunChange={setCronRun}
+                    onSendCommand={handleCronSendCommand}
+                  />
+                </div>
               )}
             </div>
           </div>
-        )}
 
-        {/* Content area */}
-        <div className="flex-1 flex min-h-0">
-          {showMainChat ? (
-            /* Main chat view (default when no file is selected) */
-            <>
-              <div className="flex-1 flex flex-col min-w-0" style={{ background: "var(--color-main-bg)" }}>
-                <ChatPanel
-                  key={activeSubagent?.childSessionKey ?? "main"}
-                  ref={activeSubagent ? undefined : chatRef}
-                  sessionTitle={activeSessionTitle}
-                  initialSessionId={activeSessionId ?? undefined}
-                  onActiveSessionChange={activeSubagent ? undefined : (id) => {
-                    setActiveSessionId(id);
+          {!isMobile && showMainChat && (
+            <aside
+              className="sidebar-animate flex-shrink-0 min-h-0 border-l flex flex-col relative overflow-hidden"
+              style={{
+                width: chatSidebarOpen ? chatSidebarWidth : 0,
+                borderColor: chatSidebarOpen ? "var(--color-border)" : "transparent",
+                background: "var(--color-bg)",
+                transition: "width 200ms ease",
+              }}
+            >
+              <div className="flex flex-col h-full relative" style={{ width: chatSidebarWidth, minWidth: chatSidebarWidth }}>
+                <ResizeHandle
+                  mode="right"
+                  containerRef={layoutRef}
+                  min={CHAT_SIDEBAR_MIN}
+                  max={CHAT_SIDEBAR_MAX}
+                  onResize={setChatSidebarWidth}
+                />
+                <ChatSessionsSidebar
+                  sessions={sessions}
+                  activeSessionId={activeSessionId}
+                  activeSessionTitle={activeSessionTitle}
+                  streamingSessionIds={streamingSessionIds}
+                  subagents={subagents}
+                  activeSubagentKey={activeSubagentKey}
+                  loading={sessionsLoading}
+                  onSelectSession={(sessionId) => {
+                    setActiveSessionId(sessionId);
                     setActiveSubagentKey(null);
+                    void chatRef.current?.loadSession(sessionId);
                   }}
-                  onSessionsChange={activeSubagent ? undefined : refreshSessions}
-                  onSubagentSpawned={activeSubagent ? undefined : handleSubagentSpawned}
-                  onSubagentClick={handleSubagentClickFromChat}
-                  onFilePathClick={handleFilePathClickFromChat}
-                  onDeleteSession={activeSubagent ? undefined : handleDeleteSession}
-                  onRenameSession={activeSubagent ? undefined : handleRenameSession}
-                  compact={isMobile}
-                  sessionKey={activeSubagent?.childSessionKey}
-                  subagentTask={activeSubagent?.task}
-                  subagentLabel={activeSubagent?.label}
-                  onBack={activeSubagent ? handleBackFromSubagent : undefined}
+                  onNewSession={() => {
+                    setActiveSessionId(null);
+                    setActiveSubagentKey(null);
+                    void chatRef.current?.newSession();
+                  }}
+                  onSelectSubagent={handleSelectSubagent}
+                  onDeleteSession={handleDeleteSession}
+                  onRenameSession={handleRenameSession}
+                  embedded
                 />
               </div>
-              {/* Chat sessions sidebar — static on desktop, drawer overlay on mobile */}
-              {isMobile ? (
-                chatSessionsOpen && (
-                  <ChatSessionsSidebar
-                    sessions={sessions}
-                    activeSessionId={activeSessionId}
-                    activeSessionTitle={activeSessionTitle}
-                    streamingSessionIds={streamingSessionIds}
-                    subagents={subagents}
-                    activeSubagentKey={activeSubagentKey}
-                    loading={sessionsLoading}
-                    onSelectSession={(sessionId) => {
-                      setActiveSessionId(sessionId);
-                      setActiveSubagentKey(null);
-                      void chatRef.current?.loadSession(sessionId);
-                    }}
-                    onNewSession={() => {
-                      setActiveSessionId(null);
-                      setActiveSubagentKey(null);
-                      void chatRef.current?.newSession();
-                      setChatSessionsOpen(false);
-                    }}
-                    onSelectSubagent={handleSelectSubagent}
-                    onDeleteSession={handleDeleteSession}
-                    onRenameSession={handleRenameSession}
-                    mobile
-                    onClose={() => setChatSessionsOpen(false)}
-                  />
-                )
-              ) : (
-                <>
-                  {!rightSidebarCollapsed && (
-                  <div
-                    className="flex shrink-0 flex-col relative"
-                    style={{ width: rightSidebarWidth, minWidth: rightSidebarWidth, background: "var(--color-sidebar-bg)" }}
-                  >
-                    <ResizeHandle
-                      mode="right"
-                      containerRef={layoutRef}
-                      min={RIGHT_SIDEBAR_MIN}
-                      max={RIGHT_SIDEBAR_MAX}
-                      onResize={setRightSidebarWidth}
-                    />
-                    {chatSidebarPreview ? (
-                      <ChatSidebarPreview
-                        preview={chatSidebarPreview}
-                        onClose={() => setChatSidebarPreview(null)}
-                      />
-                    ) : (
-                      <ChatSessionsSidebar
-                        sessions={sessions}
-                        activeSessionId={activeSessionId}
-                        activeSessionTitle={activeSessionTitle}
-                        streamingSessionIds={streamingSessionIds}
-                        subagents={subagents}
-                        activeSubagentKey={activeSubagentKey}
-                        loading={sessionsLoading}
-                        onSelectSession={(sessionId) => {
-                          setActiveSessionId(sessionId);
-                          setActiveSubagentKey(null);
-                          void chatRef.current?.loadSession(sessionId);
-                        }}
-                        onNewSession={() => {
-                          setActiveSessionId(null);
-                          setActiveSubagentKey(null);
-                          void chatRef.current?.newSession();
-                        }}
-                        onSelectSubagent={handleSelectSubagent}
-                        onDeleteSession={handleDeleteSession}
-                        onRenameSession={handleRenameSession}
-                        onCollapse={() => setRightSidebarCollapsed(true)}
-                        width={rightSidebarWidth}
-                      />
-                    )}
-                  </div>
-                  )}
-                  {rightSidebarCollapsed && (
-                    <div className="shrink-0 flex flex-col items-center pt-2.5 px-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setRightSidebarCollapsed(false)}
-                        className="p-1.5 rounded-md transition-colors hover:bg-black/5"
-                        style={{ color: "var(--color-text-muted)" }}
-                        title="Show chat sidebar (⌘⇧B)"
-                      >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect width="18" height="18" x="3" y="3" rx="2" />
-                          <path d="M15 3v18" />
-                        </svg>
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              {/* File content area */}
-              <div className="flex-1 overflow-y-auto">
-                <ContentRenderer
-                  content={content}
-                  workspaceExists={workspaceExists}
-                  expectedPath={workspaceRoot}
-                  tree={tree}
-                  activePath={activePath}
-                  browseDir={browseDir}
-                  treeLoading={treeLoading}
-                  members={context?.members}
-                  onNodeSelect={handleNodeSelect}
-                  onNavigateToObject={handleNavigateToObject}
-                  onRefreshObject={refreshCurrentObject}
-                  onRefreshTree={refreshTree}
-                  onNavigate={handleEditorNavigate}
-                  onOpenEntry={handleOpenEntry}
-                  searchFn={searchIndex}
-                  onSelectCronJob={handleSelectCronJob}
-                  onBackToCronDashboard={handleBackToCronDashboard}
-                  cronView={cronView}
-                  onCronViewChange={setCronView}
-                  cronCalMode={cronCalMode}
-                  onCronCalModeChange={setCronCalMode}
-                  cronDate={cronDate}
-                  onCronDateChange={setCronDate}
-                  cronRunFilter={cronRunFilter}
-                  onCronRunFilterChange={setCronRunFilter}
-                  cronRun={cronRun}
-                  onCronRunChange={setCronRun}
-                  onSendCommand={handleCronSendCommand}
-                />
-              </div>
+            </aside>
+          )}
 
-              {/* Chat sidebar (file/folder-scoped) — hidden for reserved paths, hidden on mobile */}
-              {!isMobile && fileContext && showChatSidebar && !rightSidebarCollapsed && (
-                <>
-                  <aside
-                    className="flex-shrink-0 border-l flex flex-col relative"
-                    style={{
-                      width: rightSidebarWidth,
-                      borderColor: "var(--color-border)",
-                      background: "var(--color-bg)",
-                    }}
-                  >
-                    <ResizeHandle
-                      mode="right"
-                      containerRef={layoutRef}
-                      min={RIGHT_SIDEBAR_MIN}
-                      max={RIGHT_SIDEBAR_MAX}
-                      onResize={setRightSidebarWidth}
-                    />
-                    <ChatPanel
-                      ref={compactChatRef}
-                      compact
-                      fileContext={fileContext}
-                      initialSessionId={fileChatSessionId ?? undefined}
-                      onFileChanged={handleFileChanged}
-                      onFilePathClick={handleFilePathClickFromChat}
-                      onActiveSessionChange={setFileChatSessionId}
-                    />
-                  </aside>
-                </>
-              )}
-            </>
+          {!isMobile && !showMainChat && fileContext && (
+            <aside
+              className="sidebar-animate flex-shrink-0 min-h-0 border-l flex flex-col relative overflow-hidden"
+              style={{
+                width: showChatSidebar && !rightSidebarCollapsed ? rightSidebarWidth : 0,
+                borderColor: showChatSidebar && !rightSidebarCollapsed ? "var(--color-border)" : "transparent",
+                background: "var(--color-bg)",
+                transition: "width 200ms ease",
+              }}
+            >
+              <div className="flex flex-col h-full relative" style={{ width: rightSidebarWidth, minWidth: rightSidebarWidth }}>
+                <ResizeHandle
+                  mode="right"
+                  containerRef={layoutRef}
+                  min={RIGHT_SIDEBAR_MIN}
+                  max={RIGHT_SIDEBAR_MAX}
+                  onResize={setRightSidebarWidth}
+                />
+                <ChatPanel
+                  ref={compactChatRef}
+                  compact
+                  fileContext={fileContext}
+                  initialSessionId={fileChatSessionId ?? undefined}
+                  onFileChanged={handleFileChanged}
+                  onFilePathClick={handleFilePathClickFromChat}
+                  onActiveSessionChange={setFileChatSessionId}
+                />
+              </div>
+            </aside>
           )}
         </div>
 
@@ -3244,84 +3386,40 @@ function ObjectView({
   ], [data.fields]);
 
   return (
-    <div className="p-6">
-      {/* Object header */}
-      <div className="mb-4">
+    <div className="flex flex-col h-full">
+      {/* Object header — compact single bar */}
+      <div
+        className="px-5 py-2.5 flex items-center gap-3 flex-shrink-0"
+        style={{ borderBottom: "1px solid var(--color-border)" }}
+      >
         <h1
-          className="font-instrument text-3xl tracking-tight capitalize"
+          className="text-sm font-semibold capitalize"
           style={{ color: "var(--color-text)" }}
         >
           {data.object.name}
         </h1>
         {data.object.description && (
-          <p
-            className="text-sm mt-1"
+          <span
+            className="text-xs"
             style={{ color: "var(--color-text-muted)" }}
           >
             {data.object.description}
-          </p>
+          </span>
         )}
-        <div className="flex items-center gap-3 mt-3 flex-wrap">
-          <span
-            className="text-xs px-2 py-1 rounded-full"
-            style={{
-              background: "var(--color-surface)",
-              color: "var(--color-text-muted)",
-              border: "1px solid var(--color-border)",
-            }}
-          >
-            {totalCount} entries
-          </span>
-          <span
-            className="text-xs px-2 py-1 rounded-full"
-            style={{
-              background: "var(--color-surface)",
-              color: "var(--color-text-muted)",
-              border: "1px solid var(--color-border)",
-            }}
-          >
-            {data.fields.length} fields
-          </span>
-
-          {hasRelationFields && (
-            <span
-              className="text-xs px-2 py-1 rounded-full"
-              style={{
-                background: "var(--color-chip-document)",
-                color: "var(--color-chip-document-text)",
-                border: "1px solid var(--color-border)",
-              }}
-            >
-              {data.fields.filter((f) => f.type === "relation").length} relation{data.fields.filter((f) => f.type === "relation").length !== 1 ? "s" : ""}
-            </span>
-          )}
-          {hasReverseRelations && (
-            <span
-              className="text-xs px-2 py-1 rounded-full"
-              style={{
-                background: "var(--color-chip-database)",
-                color: "var(--color-chip-database-text)",
-                border: "1px solid var(--color-border)",
-              }}
-            >
-              {data.reverseRelations!.filter((rr) => Object.keys(rr.entries).length > 0).length} linked from
-            </span>
-          )}
-        </div>
-
+        <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+          {totalCount} {totalCount === 1 ? "entry" : "entries"} · {data.fields.length} fields
+        </span>
+        <div className="flex-1" />
         {displayFieldCandidates.length > 0 && (
-          <div className="flex items-center gap-2 mt-3">
-            <span
-              className="text-xs"
-              style={{ color: "var(--color-text-muted)" }}
-            >
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               Display field:
             </span>
             <select
               value={data.effectiveDisplayField ?? ""}
               onChange={(e) => handleDisplayFieldChange(e.target.value)}
               disabled={updatingDisplayField}
-              className="text-xs px-2 py-1 rounded-md outline-none transition-colors cursor-pointer"
+              className="text-[11px] px-1.5 py-0.5 rounded outline-none cursor-pointer"
               style={{
                 background: "var(--color-surface)",
                 color: "var(--color-text)",
@@ -3341,136 +3439,143 @@ function ObjectView({
                 style={{ borderColor: "var(--color-text-muted)" }}
               />
             )}
-            <span
-              className="text-[10px]"
-              style={{ color: "var(--color-text-muted)", opacity: 0.6 }}
-            >
-              Used when other objects link here
-            </span>
           </div>
         )}
       </div>
 
-      {/* View switcher + Filter bar */}
+      {/* View switcher + Filter bar — single row */}
       <div
-        className="mb-4 py-3 px-4 rounded-lg border"
-        style={{
-          borderColor: "var(--color-border)",
-          background: "var(--color-surface)",
-        }}
+        className="px-5 py-1.5 flex items-center gap-4 flex-shrink-0"
+        style={{ borderBottom: "1px solid var(--color-border)" }}
       >
-        <div className="flex items-center justify-between gap-3 mb-2">
-          <ViewTypeSwitcher value={currentViewType} onChange={handleViewTypeChange} />
-          <ViewSettingsPopover
-            viewType={currentViewType}
-            settings={effectiveSettings}
-            fields={fieldsWithTimestamps}
-            onSettingsChange={handleViewSettingsChange}
+        <ViewTypeSwitcher value={currentViewType} onChange={handleViewTypeChange} />
+        <div
+          className="w-px h-4 flex-shrink-0"
+          style={{ background: "var(--color-border)" }}
+        />
+        <div className="flex-1 min-w-0">
+          <ObjectFilterBar
+            fields={data.fields}
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+            savedViews={savedViews}
+            activeViewName={activeViewName}
+            onSaveView={handleSaveView}
+            onLoadView={handleLoadView}
+            onDeleteView={handleDeleteView}
+            onSetActiveView={handleSetActiveView}
+            members={filterBarMembers}
           />
         </div>
-        <ObjectFilterBar
-          fields={data.fields}
-          filters={filters}
-          onFiltersChange={handleFiltersChange}
-          savedViews={savedViews}
-          activeViewName={activeViewName}
-          onSaveView={handleSaveView}
-          onLoadView={handleLoadView}
-          onDeleteView={handleDeleteView}
-          onSetActiveView={handleSetActiveView}
-          members={filterBarMembers}
+        <ViewSettingsPopover
+          viewType={currentViewType}
+          settings={effectiveSettings}
+          fields={fieldsWithTimestamps}
+          onSettingsChange={handleViewSettingsChange}
         />
       </div>
 
-      {/* View renderer */}
-      {currentViewType === "kanban" && (
-        <ObjectKanban
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          statuses={data.statuses}
-          members={members}
-          relationLabels={data.relationLabels}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-          onRefresh={handleRefresh}
-        />
-      )}
-      {currentViewType === "table" && (
-        <ObjectTable
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          members={members}
-          relationLabels={data.relationLabels}
-          reverseRelations={data.reverseRelations}
-          onNavigateToObject={onNavigateToObject}
-          onNavigateToEntry={onOpenEntry}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-          onRefresh={handleRefresh}
-          columnVisibility={columnVisibility}
-          onColumnVisibilityChanged={handleColumnVisibilityChanged}
-          serverPagination={{
-            totalCount,
-            page: serverPage,
-            pageSize: serverPageSize,
-            onPageChange: handlePageChange,
-            onPageSizeChange: handlePageSizeChange,
-          }}
-          onServerSearch={handleServerSearch}
-        />
-      )}
-      {currentViewType === "calendar" && (
-        <ObjectCalendar
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          dateField={effectiveSettings.calendarDateField ?? ""}
-          endDateField={effectiveSettings.calendarEndDateField}
-          mode={effectiveSettings.calendarMode ?? "month"}
-          onModeChange={(mode) => handleViewSettingsChange({ ...effectiveSettings, calendarMode: mode })}
-          members={members}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-          onEntryDateChange={handleCalendarDateChange}
-        />
-      )}
-      {currentViewType === "timeline" && (
-        <ObjectTimeline
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          startDateField={effectiveSettings.timelineStartField ?? ""}
-          endDateField={effectiveSettings.timelineEndField}
-          groupField={effectiveSettings.timelineGroupField}
-          zoom={effectiveSettings.timelineZoom ?? "week"}
-          onZoomChange={(zoom) => handleViewSettingsChange({ ...effectiveSettings, timelineZoom: zoom })}
-          members={members}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-          onEntryDateChange={handleTimelineDateChange}
-        />
-      )}
-      {currentViewType === "gallery" && (
-        <ObjectGallery
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          titleField={effectiveSettings.galleryTitleField}
-          coverField={effectiveSettings.galleryCoverField}
-          members={members}
-          relationLabels={data.relationLabels}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-        />
-      )}
-      {currentViewType === "list" && (
-        <ObjectList
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          titleField={effectiveSettings.listTitleField}
-          subtitleField={effectiveSettings.listSubtitleField}
-          members={members}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-        />
-      )}
+      {/* View renderer — full-width, no padding */}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {currentViewType === "kanban" && (
+          <div className="h-full overflow-auto px-6 py-4">
+            <ObjectKanban
+              objectName={data.object.name}
+              fields={data.fields}
+              entries={filteredEntries}
+              statuses={data.statuses}
+              members={members}
+              relationLabels={data.relationLabels}
+              onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+              onRefresh={handleRefresh}
+            />
+          </div>
+        )}
+        {currentViewType === "table" && (
+          <ObjectTable
+            objectName={data.object.name}
+            fields={data.fields}
+            entries={filteredEntries}
+            members={members}
+            relationLabels={data.relationLabels}
+            reverseRelations={data.reverseRelations}
+            onNavigateToObject={onNavigateToObject}
+            onNavigateToEntry={onOpenEntry}
+            onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+            onRefresh={handleRefresh}
+            columnVisibility={columnVisibility}
+            onColumnVisibilityChanged={handleColumnVisibilityChanged}
+            serverPagination={{
+              totalCount,
+              page: serverPage,
+              pageSize: serverPageSize,
+              onPageChange: handlePageChange,
+              onPageSizeChange: handlePageSizeChange,
+            }}
+            onServerSearch={handleServerSearch}
+          />
+        )}
+        {currentViewType === "calendar" && (
+          <div className="h-full overflow-auto px-6 py-4">
+            <ObjectCalendar
+              objectName={data.object.name}
+              fields={data.fields}
+              entries={filteredEntries}
+              dateField={effectiveSettings.calendarDateField ?? ""}
+              endDateField={effectiveSettings.calendarEndDateField}
+              mode={effectiveSettings.calendarMode ?? "month"}
+              onModeChange={(mode) => handleViewSettingsChange({ ...effectiveSettings, calendarMode: mode })}
+              members={members}
+              onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+              onEntryDateChange={handleCalendarDateChange}
+            />
+          </div>
+        )}
+        {currentViewType === "timeline" && (
+          <div className="h-full overflow-auto px-6 py-4">
+            <ObjectTimeline
+              objectName={data.object.name}
+              fields={data.fields}
+              entries={filteredEntries}
+              startDateField={effectiveSettings.timelineStartField ?? ""}
+              endDateField={effectiveSettings.timelineEndField}
+              groupField={effectiveSettings.timelineGroupField}
+              zoom={effectiveSettings.timelineZoom ?? "week"}
+              onZoomChange={(zoom) => handleViewSettingsChange({ ...effectiveSettings, timelineZoom: zoom })}
+              members={members}
+              onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+              onEntryDateChange={handleTimelineDateChange}
+            />
+          </div>
+        )}
+        {currentViewType === "gallery" && (
+          <div className="h-full overflow-auto px-6 py-4">
+            <ObjectGallery
+              objectName={data.object.name}
+              fields={data.fields}
+              entries={filteredEntries}
+              titleField={effectiveSettings.galleryTitleField}
+              coverField={effectiveSettings.galleryCoverField}
+              members={members}
+              relationLabels={data.relationLabels}
+              onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+            />
+          </div>
+        )}
+        {currentViewType === "list" && (
+          <div className="h-full overflow-auto px-6 py-4">
+            <ObjectList
+              objectName={data.object.name}
+              fields={data.fields}
+              entries={filteredEntries}
+              titleField={effectiveSettings.listTitleField}
+              subtitleField={effectiveSettings.listSubtitleField}
+              members={members}
+              onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

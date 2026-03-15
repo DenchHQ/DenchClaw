@@ -1,7 +1,14 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { type Tab, HOME_TAB_ID } from "@/lib/tab-state";
+import dynamic from "next/dynamic";
+
+const Tabs = dynamic(
+  () => import("@sinm/react-chrome-tabs").then((mod) => mod.Tabs),
+  { ssr: false },
+);
+
 import { appServeUrl } from "./app-viewer";
 
 type TabBarProps = {
@@ -14,6 +21,9 @@ type TabBarProps = {
   onCloseAll: () => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onTogglePin: (tabId: string) => void;
+  onNewTab?: () => void;
+  leftContent?: React.ReactNode;
+  rightContent?: React.ReactNode;
 };
 
 type ContextMenuState = {
@@ -21,6 +31,24 @@ type ContextMenuState = {
   x: number;
   y: number;
 } | null;
+
+function tabToFaviconClass(tab: Tab): string | undefined {
+  switch (tab.type) {
+    case "home": return "dench-favicon-home";
+    case "chat": return "dench-favicon-chat";
+    case "app": return "dench-favicon-app";
+    case "cron": return "dench-favicon-cron";
+    case "object": return "dench-favicon-object";
+    default: return "dench-favicon-file";
+  }
+}
+
+function tabToFavicon(tab: Tab): string | boolean | undefined {
+  if (tab.icon && tab.path && /\.(png|svg|jpe?g|webp)$/i.test(tab.icon)) {
+    return appServeUrl(tab.path, tab.icon);
+  }
+  return false;
+}
 
 export function TabBar({
   tabs,
@@ -32,11 +60,22 @@ export function TabBar({
   onCloseAll,
   onReorder,
   onTogglePin,
+  onNewTab,
+  leftContent,
+  rightContent,
 }: TabBarProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [isDark, setIsDark] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    setIsDark(document.documentElement.classList.contains("dark") || mq.matches);
+    const handler = () => setIsDark(document.documentElement.classList.contains("dark") || mq.matches);
+    mq.addEventListener("change", handler);
+    const obs = new MutationObserver(handler);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => { mq.removeEventListener("change", handler); obs.disconnect(); };
+  }, []);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -49,44 +88,36 @@ export function TabBar({
     };
   }, [contextMenu]);
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setContextMenu({ tabId, x: e.clientX, y: e.clientY });
+  const handleContextMenu = useCallback((tabId: string, event: MouseEvent) => {
+    if (!tabId || tabId === HOME_TAB_ID) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({ tabId, x: event.clientX, y: event.clientY });
   }, []);
 
-  const handleMiddleClick = useCallback((e: React.MouseEvent, tabId: string) => {
-    if (e.button === 1) {
-      e.preventDefault();
-      onClose(tabId);
-    }
-  }, [onClose]);
+  const homeTab = tabs.find((t) => t.id === HOME_TAB_ID);
+  const nonHomeTabs = useMemo(() => tabs.filter((t) => t.id !== HOME_TAB_ID), [tabs]);
 
-  const handleDragStart = useCallback((e: React.DragEvent, index: number) => {
-    setDragIndex(index);
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", String(index));
-  }, []);
+  const chromeTabs = useMemo(() => {
+    return nonHomeTabs.map((tab) => ({
+      id: tab.id,
+      title: tab.title,
+      active: tab.id === activeTabId,
+      favicon: tabToFavicon(tab),
+      faviconClass: tabToFaviconClass(tab),
+      isCloseIconVisible: !tab.pinned,
+    }));
+  }, [nonHomeTabs, activeTabId]);
 
-  const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setDragOverIndex(index);
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent, toIndex: number) => {
-    e.preventDefault();
-    if (dragIndex !== null && dragIndex !== toIndex) {
-      onReorder(dragIndex, toIndex);
-    }
-    setDragIndex(null);
-    setDragOverIndex(null);
-  }, [dragIndex, onReorder]);
-
-  const handleDragEnd = useCallback(() => {
-    setDragIndex(null);
-    setDragOverIndex(null);
-  }, []);
+  const handleActive = useCallback((id: string) => onActivate(id), [onActivate]);
+  const handleClose = useCallback((id: string) => onClose(id), [onClose]);
+  const handleReorder = useCallback(
+    (tabId: string, _fromIndex: number, toIndex: number) => {
+      const fromIndex = tabs.findIndex((t) => t.id === tabId);
+      if (fromIndex >= 0 && fromIndex !== toIndex) onReorder(fromIndex, toIndex);
+    },
+    [tabs, onReorder],
+  );
 
   if (tabs.length === 0) return null;
 
@@ -94,92 +125,59 @@ export function TabBar({
 
   return (
     <>
-      <div
-        ref={scrollRef}
-        className="flex items-end overflow-x-auto flex-shrink-0"
-        style={{
-          background: "var(--color-surface)",
-          borderBottom: "1px solid var(--color-border)",
-          scrollbarWidth: "none",
-        }}
-      >
-        {tabs.map((tab, index) => {
-          const isActive = tab.id === activeTabId;
-          const isDragOver = dragOverIndex === index && dragIndex !== index;
-          const isHome = tab.id === HOME_TAB_ID;
-
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              draggable={!isHome}
-              onClick={() => onActivate(tab.id)}
-              onMouseDown={isHome ? undefined : (e) => handleMiddleClick(e, tab.id)}
-              onContextMenu={isHome ? undefined : (e) => handleContextMenu(e, tab.id)}
-              onDragStart={isHome ? undefined : (e) => handleDragStart(e, index)}
-              onDragOver={isHome ? undefined : (e) => handleDragOver(e, index)}
-              onDrop={isHome ? undefined : (e) => handleDrop(e, index)}
-              onDragEnd={isHome ? undefined : handleDragEnd}
-              className={`group flex items-center gap-1.5 h-[34px] text-[12.5px] font-medium cursor-pointer flex-shrink-0 relative transition-colors duration-75 select-none ${isHome ? "px-2.5" : "pl-3 pr-1.5"}`}
-              style={{
-                color: isActive ? "var(--color-text)" : "var(--color-text-muted)",
-                background: isActive ? "var(--color-bg)" : "transparent",
-                borderBottom: isActive ? "2px solid var(--color-accent)" : "2px solid transparent",
-                borderLeft: isDragOver && !isHome ? "2px solid var(--color-accent)" : "2px solid transparent",
-                opacity: dragIndex === index ? 0.5 : 1,
-                maxWidth: isHome ? undefined : 200,
-                borderRight: isHome ? "1px solid var(--color-border)" : undefined,
-              }}
-              title={isHome ? "Home (New Chat)" : undefined}
-            >
-              {isHome ? (
-                <HomeIcon />
-              ) : (
-                <>
-                  {tab.pinned && <PinIcon />}
-                  <TabIcon type={tab.type} icon={tab.icon} appPath={tab.path} />
-                  <span className="truncate max-w-[140px]">{tab.title}</span>
-                  {!tab.pinned && (
-                    <span
-                      role="button"
-                      tabIndex={-1}
-                      onClick={(e) => { e.stopPropagation(); onClose(tab.id); }}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onClose(tab.id); } }}
-                      className="ml-0.5 p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-                      style={{ color: "var(--color-text-muted)" }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = "var(--color-surface-hover)";
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = "transparent";
-                      }}
-                    >
-                      <CloseIcon />
-                    </span>
-                  )}
-                </>
-              )}
-            </button>
-          );
-        })}
+      <div className="dench-chrome-tabs-wrapper flex items-center shrink-0 relative">
+        {leftContent && (
+          <div className="flex items-center px-1.5 shrink-0 z-10">
+            {leftContent}
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <Tabs
+            darkMode={isDark}
+            tabs={chromeTabs}
+            draggable
+            onTabActive={handleActive}
+            onTabClose={handleClose}
+            onTabReorder={handleReorder}
+            onContextMenu={handleContextMenu}
+            pinnedRight={onNewTab ? (
+              <div className="flex items-center gap-1.5 ml-1.5">
+                {nonHomeTabs.length > 0 && nonHomeTabs[nonHomeTabs.length - 1].id !== activeTabId && (
+                  <div className="w-px h-4 shrink-0" style={{ background: "var(--color-border)" }} />
+                )}
+                <button
+                  type="button"
+                  onClick={onNewTab}
+                  className="flex items-center justify-center w-7 h-7 rounded-full shrink-0 cursor-pointer transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                  style={{ color: "var(--color-text-muted)" }}
+                  title="New chat"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 5v14" /><path d="M5 12h14" />
+                  </svg>
+                </button>
+              </div>
+            ) : undefined}
+          />
+        </div>
+        {rightContent && (
+          <div className="flex items-center gap-0.5 px-2 shrink-0 z-10">
+            {rightContent}
+          </div>
+        )}
       </div>
 
       {/* Context menu */}
       {contextMenu && contextTab && (
         <div
-          className="fixed z-[9999] min-w-[180px] rounded-lg border py-1 shadow-lg"
-          style={{
-            left: contextMenu.x,
-            top: contextMenu.y,
-            background: "var(--color-surface)",
-            borderColor: "var(--color-border)",
-          }}
+          className="fixed z-9999 min-w-[180px] rounded-2xl p-1 bg-neutral-100/67 dark:bg-neutral-900/67 border border-white dark:border-white/10 backdrop-blur-md shadow-[0_0_25px_0_rgba(0,0,0,0.16)]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <ContextMenuItem
             label={contextTab.pinned ? "Unpin Tab" : "Pin Tab"}
             onClick={() => { onTogglePin(contextMenu.tabId); setContextMenu(null); }}
           />
-          <div className="h-px my-1" style={{ background: "var(--color-border)" }} />
+          <div className="h-px my-0.5 mx-1 bg-neutral-400/15" />
           <ContextMenuItem
             label="Close"
             shortcut="⌘W"
@@ -220,14 +218,8 @@ function ContextMenuItem({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="w-full flex items-center justify-between px-3 py-1.5 text-[12.5px] text-left transition-colors disabled:opacity-40 cursor-pointer disabled:cursor-default"
+      className="w-full flex items-center justify-between px-2.5 py-1.5 text-[12.5px] text-left rounded-xl transition-all disabled:opacity-40 hover:bg-neutral-400/15"
       style={{ color: "var(--color-text)" }}
-      onMouseEnter={(e) => {
-        if (!disabled) (e.currentTarget as HTMLElement).style.background = "var(--color-surface-hover)";
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.background = "transparent";
-      }}
     >
       <span>{label}</span>
       {shortcut && (
@@ -236,104 +228,5 @@ function ContextMenuItem({
         </span>
       )}
     </button>
-  );
-}
-
-function TabIcon({ type, icon, appPath }: { type: string; icon?: string; appPath?: string }) {
-  if (icon && appPath && (icon.endsWith(".png") || icon.endsWith(".svg") || icon.endsWith(".jpg") || icon.endsWith(".jpeg") || icon.endsWith(".webp"))) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={appServeUrl(appPath, icon)}
-        alt=""
-        width={14}
-        height={14}
-        className="rounded-sm flex-shrink-0"
-        style={{ objectFit: "cover" }}
-      />
-    );
-  }
-
-  switch (type) {
-    case "home":
-      return <HomeIcon />;
-    case "app":
-      return <AppIcon />;
-    case "chat":
-      return <ChatIcon />;
-    case "cron":
-      return <CronIcon />;
-    case "object":
-      return <ObjectIcon />;
-    default:
-      return <FileIcon />;
-  }
-}
-
-function CloseIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-    </svg>
-  );
-}
-
-function PinIcon() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none" className="flex-shrink-0" style={{ opacity: 0.5 }}>
-      <circle cx="12" cy="12" r="4" />
-    </svg>
-  );
-}
-
-function HomeIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0" style={{ opacity: 0.7 }}>
-      <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-      <polyline points="9 22 9 12 15 12 15 22" />
-    </svg>
-  );
-}
-
-function FileIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0" style={{ opacity: 0.6 }}>
-      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-    </svg>
-  );
-}
-
-function AppIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0" style={{ opacity: 0.6 }}>
-      <rect width="7" height="7" x="3" y="3" rx="1" /><rect width="7" height="7" x="14" y="3" rx="1" />
-      <rect width="7" height="7" x="3" y="14" rx="1" /><rect width="7" height="7" x="14" y="14" rx="1" />
-    </svg>
-  );
-}
-
-function ChatIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0" style={{ opacity: 0.6 }}>
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-    </svg>
-  );
-}
-
-function CronIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0" style={{ opacity: 0.6 }}>
-      <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
-    </svg>
-  );
-}
-
-function ObjectIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0" style={{ opacity: 0.6 }}>
-      <rect width="18" height="18" x="3" y="3" rx="2" />
-      <path d="M3 9h18" /><path d="M9 21V9" />
-    </svg>
   );
 }

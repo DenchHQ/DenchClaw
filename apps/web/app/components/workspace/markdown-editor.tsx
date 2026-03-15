@@ -239,12 +239,46 @@ export function MarkdownEditor({
       const href = link.getAttribute("href");
       if (!href) {return;}
 
-      // Intercept workspace links to handle via client-side state
+      // Anchor links: scroll to heading within the editor
+      if (href.startsWith("#")) {
+        event.preventDefault();
+        event.stopPropagation();
+        const slug = href.slice(1);
+        const editorEl = editor.view.dom;
+        const heading = editorEl.querySelector(`[id="${CSS.escape(slug)}"]`)
+          ?? editorEl.querySelector(`h1, h2, h3, h4, h5, h6`);
+        if (heading) {
+          const allHeadings = Array.from(editorEl.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+          const match = allHeadings.find((h) => {
+            const text = (h.textContent || "").trim().toLowerCase()
+              .replace(/[^\w\s-]/g, "").replace(/\s+/g, "-");
+            return text === slug;
+          });
+          (match ?? heading).scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        return;
+      }
+
+      // Workspace links: navigate via client-side state
       if (isWorkspaceLink(href)) {
         event.preventDefault();
         event.stopPropagation();
         onNavigate(href);
+        return;
       }
+
+      // Relative links (not http/https): treat as workspace file navigation
+      if (!href.startsWith("http://") && !href.startsWith("https://") && !href.startsWith("mailto:")) {
+        event.preventDefault();
+        event.stopPropagation();
+        onNavigate(href);
+        return;
+      }
+
+      // External links: open in new tab
+      event.preventDefault();
+      event.stopPropagation();
+      window.open(href, "_blank", "noopener,noreferrer");
     };
 
     const editorElement = editor.view.dom;

@@ -9,7 +9,7 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 
-type WebSession = {
+export type WebSession = {
 	id: string;
 	title: string;
 	createdAt: number;
@@ -55,6 +55,8 @@ type ChatSessionsSidebarProps = {
 	onCollapse?: () => void;
 	/** When true, show a loader instead of empty state (e.g. initial sessions fetch). */
 	loading?: boolean;
+	/** When true, renders just the content without the aside wrapper (for embedding in another sidebar). */
+	embedded?: boolean;
 };
 
 /** Format a timestamp into a human-readable relative time string. */
@@ -164,6 +166,7 @@ export function ChatSessionsSidebar({
 	onClose,
 	width: widthProp,
 	loading = false,
+	embedded = false,
 }: ChatSessionsSidebarProps) {
 	const [hoveredId, setHoveredId] = useState<string | null>(null);
 	const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -229,24 +232,13 @@ export function ChatSessionsSidebar({
 	const grouped = groupSessions(filteredSessions);
 
 	const width = mobile ? "280px" : (widthProp ?? 260);
-	const headerHeight = 40; // px — match padding so list content clears the overlay
-	const sidebar = (
-		<aside
-			className={`flex flex-col h-full shrink-0 ${mobile ? "drawer-right" : "border-l"}`}
-			style={{
-				width: typeof width === "number" ? `${width}px` : width,
-				minWidth: typeof width === "number" ? `${width}px` : width,
-				borderColor: "var(--color-border)",
-				background: "var(--color-sidebar-bg)",
-			}}
-		>
-			{/* Scrollable list fills the sidebar; header overlays the top with blur */}
-			<div className="flex-1 min-h-0 relative">
-				{/* Session list — scrolls under the header */}
-				<div
-					className="absolute inset-0 overflow-y-auto"
-					style={{ paddingTop: headerHeight }}
-				>
+	const headerHeight = embedded ? 36 : 40;
+	const content = (
+		<div className="flex-1 min-h-0 relative">
+			<div
+				className="absolute inset-0 overflow-y-auto"
+				style={{ paddingTop: headerHeight }}
+			>
 				{loading && sessions.length === 0 ? (
 					<div className="px-4 py-8 flex flex-col items-center justify-center min-h-[120px]">
 						<UnicodeSpinner
@@ -460,11 +452,12 @@ export function ChatSessionsSidebar({
 			</div>
 			{/* Header overlay: backdrop blur + 80% bg; list scrolls under it */}
 			<div
-				className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between border-b px-4 py-2 backdrop-blur-md"
+				className={`absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 backdrop-blur-md ${embedded ? "" : "border-b"}`}
 				style={{
 					height: headerHeight,
-					borderColor: "var(--color-border)",
-					background: "color-mix(in srgb, var(--color-sidebar-bg) 80%, transparent)",
+					borderColor: embedded ? undefined : "var(--color-border)",
+					background: "var(--color-sidebar-bg)",
+					boxShadow: embedded ? "inset 0 -1px 0 0 var(--color-border)" : undefined,
 				}}
 			>
 				<div className="min-w-0 flex-1 flex items-center gap-1.5">
@@ -492,10 +485,10 @@ export function ChatSessionsSidebar({
 				<button
 					type="button"
 					onClick={onNewSession}
-					className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer shrink-0 ml-1.5"
+					className={`flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium transition-all cursor-pointer shrink-0 ml-1.5 ${embedded ? "hover:bg-neutral-400/15" : ""}`}
 					style={{
-						color: "var(--color-chat-sidebar-active-text)",
-						background: "var(--color-chat-sidebar-active-bg)",
+						color: embedded ? "var(--color-text)" : "var(--color-chat-sidebar-active-text)",
+						background: embedded ? "transparent" : "var(--color-chat-sidebar-active-bg)",
 					}}
 					title="New chat"
 				>
@@ -504,6 +497,23 @@ export function ChatSessionsSidebar({
 				</button>
 			</div>
 		</div>
+	);
+
+	if (embedded) {
+		return content;
+	}
+
+	const sidebar = (
+		<aside
+			className={`flex flex-col h-full shrink-0 ${mobile ? "drawer-right" : "border-l"}`}
+			style={{
+				width: typeof width === "number" ? `${width}px` : width,
+				minWidth: typeof width === "number" ? `${width}px` : width,
+				borderColor: "var(--color-border)",
+				background: "var(--color-sidebar-bg)",
+			}}
+		>
+			{content}
 		</aside>
 	);
 

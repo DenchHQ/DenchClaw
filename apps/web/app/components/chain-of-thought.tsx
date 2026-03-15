@@ -1259,7 +1259,10 @@ function ToolStep({
 								: "var(--color-text-secondary)",
 					}}
 				>
-					<span className={`break-all${status === "running" ? " animate-pulse" : ""}`}>{label}</span>
+					<span
+						className={`break-all${status === "running" ? " animate-pulse" : ""}${outputText && !isSingleMedia && !diffText && status === "done" ? " cursor-pointer hover:underline" : ""}`}
+						onClick={outputText && !isSingleMedia && !diffText && status === "done" ? () => setShowOutput((v) => !v) : undefined}
+					>{label}</span>
 					{/* Exit code badge for exec tools */}
 					{kind === "exec" && status === "done" && output?.exitCode !== undefined && (
 						<span
@@ -1456,22 +1459,6 @@ function ToolStep({
 					!isSingleMedia &&
 					!diffText && (
 						<div className="mt-1">
-							{status === "done" && (
-								<button
-									type="button"
-									onClick={() =>
-										setShowOutput((v) => !v)
-									}
-									className="text-[11px] hover:underline cursor-pointer"
-									style={{
-										color: "var(--color-accent)",
-									}}
-								>
-									{showOutput
-										? "Hide output"
-										: "Show output"}
-								</button>
-							)}
 							{(showOutput || status === "running") && (
 								<pre
 									className="mt-1 text-[11px] font-mono rounded-lg px-2.5 py-2 overflow-x-auto whitespace-pre-wrap break-all max-h-96 overflow-y-auto leading-relaxed"

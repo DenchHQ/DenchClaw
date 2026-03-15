@@ -199,69 +199,48 @@ export function ProfileSwitcher({
 
       {showSwitcher && isOpen && (
         <div
-          className="absolute left-0 top-full mt-1 w-64 rounded-lg overflow-hidden z-50"
-          style={{
-            background: "var(--color-surface-raised)",
-            border: "1px solid var(--color-border)",
-            boxShadow: "var(--shadow-lg)",
-          }}
+          className="absolute left-0 top-full mt-1.5 w-64 rounded-2xl overflow-hidden z-50 p-1 bg-neutral-100/[0.67] dark:bg-neutral-900/[0.67] border border-white dark:border-white/10 backdrop-blur-md shadow-[0_0_25px_0_rgba(0,0,0,0.16)]"
         >
-          {/* Header */}
           <div
-            className="px-3 py-2 text-xs font-medium"
-            style={{
-              color: "var(--color-text-muted)",
-              borderBottom: "1px solid var(--color-border)",
-            }}
+            className="px-2.5 py-1.5 text-[11px] font-medium"
+            style={{ color: "var(--color-text-muted)" }}
           >
             Workspaces
           </div>
 
-          {/* Workspace list */}
-          <div className="py-1 max-h-64 overflow-y-auto">
+          <div className="max-h-64 overflow-y-auto">
             {workspaces.map((workspace) => {
               const isCurrent = workspace.name === activeWorkspace;
               return (
-                <div key={workspace.name} className="flex items-center gap-1 px-1.5 py-0.5">
+                <div key={workspace.name} className="flex items-center gap-0.5">
                   <button
                     onClick={() => void handleSwitch(workspace.name)}
                     disabled={switching || !!deletingWorkspace}
-                    className="flex-1 min-w-0 flex items-center gap-2 px-1.5 py-1.5 rounded text-left text-sm transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
+                    className="flex-1 min-w-0 flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-sm transition-all hover:bg-neutral-400/15 disabled:opacity-50 cursor-pointer"
                     style={{ color: "var(--color-text)" }}
                   >
-                    {/* Active indicator */}
                     <span
-                      className="w-2 h-2 rounded-full flex-shrink-0"
+                      className="w-2 h-2 rounded-full shrink-0"
                       style={{
                         background: isCurrent ? "var(--color-success)" : "transparent",
                         border: isCurrent ? "none" : "1px solid var(--color-border-strong)",
                       }}
                     />
-
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate font-medium">
-                          {workspace.name}
-                        </span>
-                      </div>
-                      <div
-                        className="text-xs truncate mt-0.5"
+                      <span className="truncate font-medium text-[13px] block">
+                        {workspace.name}
+                      </span>
+                      <span
+                        className="text-[11px] truncate block mt-0.5"
                         style={{ color: "var(--color-text-muted)" }}
                       >
                         {workspace.workspaceDir
                           ? shortenPath(workspace.workspaceDir)
                           : "No workspace yet"}
-                      </div>
+                      </span>
                     </div>
-
                     {isCurrent && (
-                      <span
-                        className="text-xs px-1.5 py-0.5 rounded"
-                        style={{
-                          background: "var(--color-accent-light)",
-                          color: "var(--color-accent)",
-                        }}
-                      >
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 bg-neutral-400/15" style={{ color: "var(--color-text-muted)" }}>
                         Active
                       </span>
                     )}
@@ -272,28 +251,15 @@ export function ProfileSwitcher({
                       onClick={() => void handleDeleteWorkspace(workspace.name)}
                       disabled={switching || !!deletingWorkspace}
                       title={`Delete workspace ${workspace.name}`}
-                      className="p-1.5 rounded transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
+                      className="p-1.5 rounded-xl transition-all hover:bg-neutral-400/15 disabled:opacity-50 shrink-0 cursor-pointer"
                       style={{
                         color: deletingWorkspace === workspace.name
                           ? "var(--color-text-muted)"
                           : "var(--color-error)",
                       }}
                     >
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M3 6h18" />
-                        <path d="M8 6V4h8v2" />
-                        <path d="M19 6l-1 14H6L5 6" />
-                        <path d="M10 11v6" />
-                        <path d="M14 11v6" />
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" />
                       </svg>
                     </button>
                   )}
@@ -304,7 +270,7 @@ export function ProfileSwitcher({
 
           {actionError && (
             <p
-              className="mx-3 mb-2 mt-1 rounded px-2 py-1 text-xs"
+              className="mx-2 mb-1 mt-1 rounded-xl px-2.5 py-1.5 text-xs"
               style={{
                 background: "rgba(220, 38, 38, 0.08)",
                 color: "var(--color-error)",
@@ -314,17 +280,16 @@ export function ProfileSwitcher({
             </p>
           )}
 
-          {/* Create new */}
-          <div style={{ borderTop: "1px solid var(--color-border)" }}>
+          <div className="border-t border-neutral-400/15 mt-0.5 pt-0.5">
             <button
               onClick={() => {
                 setIsOpen(false);
                 onCreateWorkspace?.();
               }}
-              className="w-full flex items-center gap-2 px-3 py-2.5 text-sm transition-colors hover:bg-[var(--color-surface-hover)]"
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm rounded-xl transition-all hover:bg-neutral-400/15 cursor-pointer"
               style={{ color: "var(--color-accent)" }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 5v14" /><path d="M5 12h14" />
               </svg>
               New Workspace
