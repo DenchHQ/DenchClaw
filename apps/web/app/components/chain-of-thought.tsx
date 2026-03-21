@@ -233,6 +233,7 @@ type StepKind =
 function classifyTool(
 	name: string,
 	args?: Record<string, unknown>,
+	output?: Record<string, unknown>,
 ): StepKind {
 	const n = name.toLowerCase().replace(/[_-]/g, "");
 	if (
@@ -303,7 +304,22 @@ function classifyTool(
 			"generateimage",
 		].some((k) => n.includes(k))
 	)
-		{return "image";}
+		{
+			const description =
+				typeof args?.description === "string"
+					? args.description.trim()
+					: "";
+			if (description || n.includes("generateimage") || n.includes("dalle")) {
+				return "image";
+			}
+
+			const filePath = getFilePath(args, output);
+			if (filePath && detectMedia(filePath) === "image") {
+				return "read";
+			}
+
+			return "image";
+		}
 	return "generic";
 }
 
@@ -506,7 +522,7 @@ function groupToolSteps(tools: ToolPart[]): VisualItem[] {
 	let i = 0;
 	while (i < tools.length) {
 		const tool = tools[i];
-		const kind = classifyTool(tool.toolName, tool.args);
+		const kind = classifyTool(tool.toolName, tool.args, tool.output);
 		// Check both args AND output for the file path
 		const filePath = getFilePath(tool.args, tool.output);
 		const media = filePath ? detectMedia(filePath) : null;
@@ -519,7 +535,7 @@ function groupToolSteps(tools: ToolPart[]): VisualItem[] {
 			let j = i + 1;
 			while (j < tools.length) {
 				const next = tools[j];
-				const nextKind = classifyTool(next.toolName, next.args);
+				const nextKind = classifyTool(next.toolName, next.args, next.output);
 				const nextPath = getFilePath(next.args, next.output);
 				const nextMedia = nextPath ? detectMedia(nextPath) : null;
 				if (nextKind === "read" && nextMedia === media && nextPath) {
@@ -541,7 +557,7 @@ function groupToolSteps(tools: ToolPart[]): VisualItem[] {
 			let j = i + 1;
 			while (j < tools.length) {
 				const next = tools[j];
-				const nextKind = classifyTool(next.toolName, next.args);
+				const nextKind = classifyTool(next.toolName, next.args, next.output);
 				if (nextKind === "fetch") {
 					group.push(next);
 					j++;
@@ -1192,7 +1208,7 @@ function ToolStep({
 	output?: Record<string, unknown>;
 	errorText?: string;
 }) {
-	const kind = classifyTool(toolName, args);
+	const kind = classifyTool(toolName, args, output);
 	// Show output by default for exec/command tools — these are the most
 	// useful to see inline.  Other tools default to collapsed.
 	const [showOutput, setShowOutput] = useState(kind === "exec" || kind === "generic");
