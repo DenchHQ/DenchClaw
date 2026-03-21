@@ -270,9 +270,63 @@ export function getRunningSessionIds(): string[] {
 	return ids;
 }
 
+function readSharedSubagentRegistryEntries(): Array<Record<string, unknown>> {
+	const registryPath = join(resolveOpenClawStateDir(), "subagents", "runs.json");
+	if (!existsSync(registryPath)) {
+		return [];
+	}
+	try {
+		const raw = JSON.parse(readFileSync(registryPath, "utf-8")) as {
+			runs?: Record<string, Record<string, unknown>>;
+		};
+		return Object.values(raw.runs ?? {});
+	} catch {
+		return [];
+	}
+}
+
+function resolveSubscribeRunDiskStatus(
+	sessionKey: string,
+): "running" | "completed" | "error" | "unknown" {
+	for (const entry of readSharedSubagentRegistryEntries()) {
+		if (entry.childSessionKey !== sessionKey) {
+			continue;
+		}
+		if (typeof entry.endedAt !== "number") {
+			return "running";
+		}
+		const outcome = asRecord(entry.outcome);
+		if (outcome?.status === "error") {
+			return "error";
+		}
+		return "completed";
+	}
+	return "unknown";
+}
+
+function reconcileSubscribeOnlyRunWithDisk(
+	run: ActiveRun,
+): "running" | "completed" | "error" | "unknown" {
+	if (!run.isSubscribeOnly || !run.sessionKey || run.status !== "running") {
+		if (run.status === "completed") {
+			return "completed";
+		}
+		if (run.status === "error") {
+			return "error";
+		}
+		return "unknown";
+	}
+	const diskStatus = resolveSubscribeRunDiskStatus(run.sessionKey);
+	return diskStatus;
+}
+
 function hasRunningSubagentsInMemory(parentWebSessionId: string): boolean {
 	for (const [_key, run] of activeRuns) {
 		if (run.isSubscribeOnly && run.parentSessionId === parentWebSessionId && run.status === "running") {
+			const diskStatus = reconcileSubscribeOnlyRunWithDisk(run);
+			if (diskStatus === "completed" || diskStatus === "error") {
+				continue;
+			}
 			return true;
 		}
 	}
@@ -284,26 +338,22 @@ export async function hasRunningSubagentsForParent(parentWebSessionId: string): 
 	if (hasRunningSubagentsInMemory(parentWebSessionId)) {
 		return true;
 	}
-	// Fallback: check the gateway disk registry
-	const registryPath = join(resolveOpenClawStateDir(), "subagents", "runs.json");
-	if (!await pathExistsAsync(registryPath)) {return false;}
-	try {
-		const raw = JSON.parse(await readFile(registryPath, "utf-8")) as {
-			runs?: Record<string, Record<string, unknown>>;
-		};
-		const runs = raw?.runs;
-		if (!runs) {return false;}
-		const parentKeyPattern = `:web:${parentWebSessionId}`;
-		const now = Date.now();
-		for (const entry of Object.values(runs)) {
-			const requester = typeof entry.requesterSessionKey === "string" ? entry.requesterSessionKey : "";
-			if (!requester.endsWith(parentKeyPattern)) {continue;}
-			if (typeof entry.endedAt === "number") {continue;}
-			const createdAt = typeof entry.createdAt === "number" ? entry.createdAt : 0;
-			if (createdAt > 0 && now - createdAt > SUBAGENT_REGISTRY_STALENESS_MS) {continue;}
-			return true;
+	const parentKeyPattern = `:web:${parentWebSessionId}`;
+	const now = Date.now();
+	for (const entry of readSharedSubagentRegistryEntries()) {
+		const requester = typeof entry.requesterSessionKey === "string" ? entry.requesterSessionKey : "";
+		if (!requester.endsWith(parentKeyPattern)) {
+			continue;
 		}
-	} catch { /* ignore */ }
+		if (typeof entry.endedAt === "number") {
+			continue;
+		}
+		const createdAt = typeof entry.createdAt === "number" ? entry.createdAt : 0;
+		if (createdAt > 0 && now - createdAt > SUBAGENT_REGISTRY_STALENESS_MS) {
+			continue;
+		}
+		return true;
+	}
 	return false;
 }
 
@@ -330,6 +380,13 @@ export function subscribeToRun(
 	if (replay) {
 		for (const event of run.eventBuffer) {
 			callback(event);
+		}
+	}
+
+	if (run.isSubscribeOnly && run.status === "running") {
+		const diskStatus = reconcileSubscribeOnlyRunWithDisk(run);
+		if (diskStatus === "completed" || diskStatus === "error") {
+			finalizeSubscribeRun(run, diskStatus);
 		}
 	}
 
@@ -1068,16 +1125,25 @@ function wireSubscribeOnlyProcess(
 
 		if (ev.event === "chat") {
 			const finalText = extractAssistantTextFromChatPayload(ev.data);
+			const state = typeof ev.data?.state === "string" ? ev.data.state : "";
+			const message = asRecord(ev.data?.message);
+			const role = typeof message?.role === "string" ? message.role : "";
 			if (finalText) {
-				closeReasoning();
-				if (!textStarted) {
-					currentTextId = nextId("text");
-					emit({ type: "text-start", id: currentTextId });
-					textStarted = true;
+				if (liveStats.assistantChunks === 0) {
+					closeReasoning();
+					if (!textStarted) {
+						currentTextId = nextId("text");
+						emit({ type: "text-start", id: currentTextId });
+						textStarted = true;
+					}
+					emit({ type: "text-delta", id: currentTextId, delta: finalText });
+					accAppendText(finalText);
+					closeText();
 				}
-				emit({ type: "text-delta", id: currentTextId, delta: finalText });
-				accAppendText(finalText);
-				closeText();
+			}
+			if (state === "final" && role === "assistant" && run.status === "running") {
+				finalizeSubscribeRun(run);
+				return;
 			}
 		}
 
@@ -1130,6 +1196,11 @@ const rl = createInterface({ input: child.stdout! });
 			return;
 		}
 		run._subscribeProcess = null;
+		const diskStatus = reconcileSubscribeOnlyRunWithDisk(run);
+		if (diskStatus === "completed" || diskStatus === "error") {
+			finalizeSubscribeRun(run, diskStatus);
+			return;
+		}
 		if (run.status !== "running") { return; }
 		if (run._lifecycleEnded) {
 			if (run._finalizeTimer) { clearTimeout(run._finalizeTimer); run._finalizeTimer = null; }
@@ -1419,6 +1490,7 @@ function wireChildProcess(run: ActiveRun): void {
 	let statusReasoningActive = false;
 	let waitingStatusAnnounced = false;
 	let agentErrorReported = false;
+	let parentAssistantChunksCurrentTurn = 0;
 	const stderrChunks: string[] = [];
 
 	// ── Ordered accumulation tracking (preserves interleaving for persistence) ──
@@ -1558,6 +1630,7 @@ function wireChildProcess(run: ActiveRun): void {
 			ev.stream === "lifecycle" &&
 			ev.data?.phase === "start"
 		) {
+			parentAssistantChunksCurrentTurn = 0;
 			openStatusReasoning("Preparing response...");
 		}
 
@@ -1598,6 +1671,7 @@ function wireChildProcess(run: ActiveRun): void {
 					: undefined;
 			const chunk = delta ?? textFallback;
 			if (chunk) {
+				parentAssistantChunksCurrentTurn += 1;
 				closeReasoning();
 				if (!textStarted) {
 					currentTextId = nextId("text");
@@ -1768,7 +1842,9 @@ function wireChildProcess(run: ActiveRun): void {
 		if (ev.event === "chat") {
 			const text = extractAssistantTextFromChatPayload(ev.data);
 			if (text) {
-				emitAssistantFinalText(text);
+				if (parentAssistantChunksCurrentTurn === 0) {
+					emitAssistantFinalText(text);
+				}
 			}
 		}
 

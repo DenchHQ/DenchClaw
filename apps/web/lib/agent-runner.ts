@@ -1010,6 +1010,17 @@ class GatewayProcessHandle
 			const stream = typeof payload.stream === "string" ? payload.stream : "";
 			const data = asRecord(payload.data);
 			const phase = data && typeof data.phase === "string" ? data.phase : "";
+			if (
+				this.params.mode === "start" &&
+				this.params.sessionKey?.includes(":web:") &&
+				stream === "tool" &&
+				phase === "result" &&
+				typeof data?.name === "string" &&
+				data.name === "sessions_yield" &&
+				sessionKey === this.params.sessionKey
+			) {
+				this.scheduleClose();
+			}
 			if (!(stream === "lifecycle" && phase === "error")) {
 				this.clearLifecycleErrorCloseTimer();
 			}
@@ -1031,6 +1042,9 @@ class GatewayProcessHandle
 		}
 
 		if (frame.event === "chat") {
+			const payload = asRecord(frame.payload) ?? {};
+			const sessionKey =
+				typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
 			// Forward chat frames in subscribe mode unconditionally.
 			// In start mode, only forward when using chat.send for
 			// slash commands — the gateway returns command responses
@@ -1043,9 +1057,6 @@ class GatewayProcessHandle
 			if (!forwardChat) {
 				return;
 			}
-			const payload = asRecord(frame.payload) ?? {};
-			const sessionKey =
-				typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
 			if (!this.shouldAcceptSessionEvent(sessionKey)) {
 				return;
 			}

@@ -1076,6 +1076,135 @@ describe("active-runs", () => {
 			}
 		});
 
+		it("reconciles yielded parent waits when a child only finishes in the shared registry", async () => {
+			vi.useFakeTimers();
+			try {
+				const { startRun, startSubscribeRun, subscribeToRun, getActiveRun } =
+					await setup();
+				const { spawnAgentProcess, spawnAgentSubscribeProcess } = await import(
+					"./agent-runner.js"
+				);
+				const { existsSync, readFileSync } = await import("node:fs");
+				const mockRunSpawn = vi.mocked(spawnAgentProcess);
+				const mockSubscribeSpawn = vi.mocked(spawnAgentSubscribeProcess);
+				const mockExistsSync = vi.mocked(existsSync);
+				const mockReadFileSync = vi.mocked(readFileSync);
+				mockRunSpawn.mockReset();
+				mockSubscribeSpawn.mockReset();
+				mockExistsSync.mockReset();
+				mockReadFileSync.mockReset();
+
+				const parentChild = createMockChild();
+				const subagentStream = createMockChild();
+				const parentSubscribe = createMockChild();
+				const unexpectedRestart = createMockChild();
+
+				mockRunSpawn.mockReturnValue(parentChild as unknown as ChildProcess);
+				mockSubscribeSpawn
+					.mockReturnValueOnce(subagentStream as unknown as ChildProcess)
+					.mockReturnValueOnce(parentSubscribe as unknown as ChildProcess)
+					.mockReturnValue(unexpectedRestart as unknown as ChildProcess);
+
+				let registryEnded = false;
+				mockExistsSync.mockImplementation(((
+					filePath: Parameters<typeof existsSync>[0],
+				) => String(filePath).endsWith("/subagents/runs.json")) as typeof existsSync);
+				mockReadFileSync.mockImplementation(((
+					filePath: unknown,
+				) => {
+					if (String(filePath).endsWith("/subagents/runs.json")) {
+						return JSON.stringify({
+							runs: {
+								stale: {
+									requesterSessionKey: "agent:main:web:parent-yield-stale",
+									childSessionKey: "sub:announce:stale",
+									createdAt: Date.now(),
+									...(registryEnded
+										? {
+											endedAt: Date.now(),
+											outcome: { status: "completed" },
+										}
+										: {}),
+								},
+							},
+						});
+					}
+					return "";
+				}) as unknown as typeof readFileSync);
+
+				startSubscribeRun({
+					sessionKey: "sub:announce:stale",
+					parentSessionId: "parent-yield-stale",
+					task: "child task",
+				});
+				startRun({
+					sessionId: "parent-yield-stale",
+					message: "run parent",
+					agentSessionId: "parent-yield-stale",
+				});
+
+				const events: SseEvent[] = [];
+				const completed: boolean[] = [];
+				subscribeToRun(
+					"parent-yield-stale",
+					(event) => {
+						if (event) {
+							events.push(event);
+						} else {
+							completed.push(true);
+						}
+					},
+					{ replay: false },
+				);
+
+				parentChild.stdout.end();
+				await vi.advanceTimersByTimeAsync(0);
+				parentChild._emit("close", 0);
+
+				expect(getActiveRun("parent-yield-stale")?.status).toBe(
+					"waiting-for-subagents",
+				);
+				expect(getActiveRun("sub:announce:stale")?.status).toBe("running");
+
+				registryEnded = true;
+				subagentStream.stdout.end();
+				await vi.advanceTimersByTimeAsync(0);
+				subagentStream._emit("close", 0);
+
+				expect(getActiveRun("sub:announce:stale")?.status).toBe("completed");
+				expect(mockSubscribeSpawn).toHaveBeenCalledTimes(2);
+
+				parentSubscribe._writeLine({
+					event: "chat",
+					sessionKey: "agent:main:web:parent-yield-stale",
+					globalSeq: 2,
+					data: {
+						state: "final",
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "Both subagents are done." }],
+						},
+					},
+				});
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(
+					events.some(
+						(e) =>
+							e.type === "text-delta" &&
+							typeof e.delta === "string" &&
+							e.delta.includes("Both subagents are done."),
+					),
+				).toBe(true);
+
+				await vi.advanceTimersByTimeAsync(5_000);
+				expect(completed).toHaveLength(1);
+				expect(getActiveRun("parent-yield-stale")?.status).toBe("completed");
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it("does not spam duplicate waiting-status deltas while already waiting", async () => {
 			vi.useFakeTimers();
 			try {
