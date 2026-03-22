@@ -92,6 +92,8 @@ Never rename partially. If you can't complete all steps, don't start the rename 
 - Protected object deletion: check `immutable` column AND `protected_objects` in `workspace_context.yaml`. NEVER delete protected objects.
 - Field type change: warn user before changing type on field with existing data.
 - Missing required fields: validate before INSERT, report which fields are missing.
+- **DuckDB SQL errors**: See the "Common DuckDB Pitfalls" section in the **duckdb-operations** child skill. The most frequent causes: unquoted field names with spaces (use `"Full Name"` not `Full Name`), wrong transaction syntax (`BEGIN TRANSACTION` not `BEGIN`), unescaped single quotes, and PIVOT views without the `IN (...)` field list.
+- **"Script not found" on action buttons**: The `.actions/` directory and/or script files were not created. See the **actions** child skill post-creation checklist.
 
 ## Critical Reminders
 
@@ -108,9 +110,11 @@ Never rename partially. If you can't complete all steps, don't start the rename 
 - **NOTES**: Always use type "richtext" for Notes fields
 - **USER FIELDS**: Resolve member name to ID from `workspace_context.yaml` BEFORE inserting
 - **ENUM FIELDS**: Use type "enum" with `enum_values` JSON array
-- **RELATION FIELDS**: Use type "relation" with `related_object_id`
+- **RELATION FIELDS (PROACTIVE)**: Use type "relation" with `related_object_id` and `relationship_type`. **ALWAYS create relation fields when objects are obviously linked** — don't wait for the user to ask. Examples: people→company, deal→contact, deal→company, task→project, case→client, invoice→company. If you're creating object B and object A exists, ask: "Would B entries reference A entries?" If yes, add a relation. Relation fields must be created via SQL (not the API). See **object-builder** child skill for the full relation pattern and common relation pairs.
 - **TAGS FIELDS**: Use type "tags" for free-form string arrays. Value stored as `'["tag1","tag2"]'`
-- **ACTION FIELDS**: Use type `"action"` with `default_value` containing `{"actions":[...]}` JSON. Action fields are excluded from PIVOT views. Scripts live in `.actions/` directory. See **actions** child skill.
+- **URL FIELDS**: Use type "url" for website addresses and links
+- **FILE FIELDS**: Use type "file" for file attachments (stores file path or URL)
+- **ACTION FIELDS (CRITICAL — READ CAREFULLY)**: Use type `"action"` with `default_value` containing `{"actions":[...]}` JSON. Action fields are excluded from PIVOT views. **When using file-based scripts (`scriptPath`), you MUST also: (1) `mkdir -p` the `.actions/` directory, (2) write every script file referenced in the config, (3) update `.object.yaml` with `action_config`.** If you skip creating the script files, the button will render but clicking it shows "Script not found". See **actions** child skill for the mandatory post-creation checklist and a complete end-to-end example.
 - **KANBAN**: Use `default_view = 'kanban'`, set `view_settings.kanbanField: "Status"`, auto-create Status and Assigned To fields
 - **CALENDAR**: Use `default_view = 'calendar'`, set `view_settings.calendarDateField` to the date field
 - **TIMELINE**: Use `default_view = 'timeline'`, set `view_settings.timelineStartField` and optionally `timelineEndField`
@@ -120,6 +124,8 @@ Never rename partially. If you can't complete all steps, don't start the rename 
 - **COLUMN REORDERING**: If the user asks to reorder table columns, do not try to encode that in `views[].columns`. Update the object's field `sort_order` in DuckDB, then regenerate `.object.yaml` so its top-level `fields` list matches the new schema order.
 - **COLUMN WIDTHS**: If the user asks to resize or set column widths, set `view_settings.column_widths` (object-level) or `views[].column_widths` (per-view) as a map of field name to pixel width (e.g. `column_widths: { "Full Name": 250, "Status": 150 }`). The UI also auto-persists widths when columns are drag-resized.
 - **PROTECTED OBJECTS**: Never delete objects listed in `workspace_context.yaml` `protected_objects`
+- **DUCKDB QUOTING**: Field names with spaces MUST be double-quoted in SQL: `"Full Name"`, `"Email Address"`, etc. Without quotes, DuckDB treats them as separate identifiers and the query fails.
+- **PIVOT VIEWS**: Always use the `IN (...)` clause to list field names explicitly. Exclude action fields with `AND f.type != 'action'`. See **duckdb-operations** child skill.
 - **ONE EXEC CALL**: Batch related SQL in a single transaction
 - **workspace_context.yaml**: READ-ONLY. Never modify. Data flows from the CRM UI only.
 - **Source of truth**: DuckDB for all structured data. Filesystem for document content and navigation tree. Never duplicate entry data to the filesystem.

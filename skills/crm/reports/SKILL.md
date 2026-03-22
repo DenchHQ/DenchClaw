@@ -78,6 +78,20 @@ Store reports as `.report.json` files in `{{WORKSPACE_PATH}}/**` (wherever appro
 - Use `DATE_TRUNC('month', created_at)` for time-series grouping
 - Always include `ORDER BY` for consistent chart rendering
 - Use aggregate functions: `COUNT(*)`, `SUM(...)`, `AVG(...)`, `MIN(...)`, `MAX(...)`
+- **Double-quote field names with spaces**: `"Full Name"`, `"Email Address"`, `"Assigned To"`
+- **Verify the PIVOT view exists before writing report SQL**: run `SELECT COUNT(*) FROM v_{object}` first. If the view doesn't exist, create it (see **duckdb-operations** skill).
+
+### Before writing a report
+
+1. **Verify the PIVOT view exists**: `duckdb {{WORKSPACE_PATH}}/workspace.duckdb "SELECT COUNT(*) FROM v_{object}"` — if this fails, the view needs to be created first.
+2. **Check the view columns**: `duckdb {{WORKSPACE_PATH}}/workspace.duckdb -json "SELECT * FROM v_{object} LIMIT 1"` — use the actual column names in your SQL (they are case-sensitive and may contain spaces).
+3. **Test each panel's SQL individually**: Run each query to confirm it returns data before assembling the report JSON.
+
+### Handling empty data
+
+If a view exists but returns 0 rows, the chart will render but show nothing. This is fine — no special handling needed. However, if the user asks "why is the chart empty?", check:
+- Are there entries in the object? `SELECT COUNT(*) FROM entries WHERE object_id = (SELECT id FROM objects WHERE name = '{object}')`
+- Do entries have field values? `SELECT COUNT(*) FROM entry_fields WHERE entry_id IN (SELECT id FROM entries WHERE object_id = ...)`
 
 ---
 
@@ -165,7 +179,9 @@ The user can then "Pin" the inline report to save it as a `.report.json` file.
 
 After creating a `.report.json` file:
 
-- [ ] Verify the report JSON is valid and all SQL queries work: test each panel's SQL individually
+- [ ] **Verify the PIVOT view exists**: `duckdb {{WORKSPACE_PATH}}/workspace.duckdb "SELECT COUNT(*) FROM v_{object}"` — create the view if missing
+- [ ] **Test each panel's SQL individually**: Run each query against the DB to confirm it returns valid data
+- [ ] Verify the report JSON is valid (proper JSON syntax, no trailing commas)
 - [ ] Choose which directory the report should be created in `{{WORKSPACE_PATH}}` based on the context of the conversation, if nothing very relevant, create/use the `{{WORKSPACE_PATH}}/reports/` directory.
 - [ ] Write the file: `{{WORKSPACE_PATH}}/**/{slug}.report.json`
 - [ ] Tell the user they can view it in the workspace sidebar under whichever directory it was rightfully placed in based on the context.

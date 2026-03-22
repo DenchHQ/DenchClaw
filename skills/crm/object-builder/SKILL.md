@@ -30,7 +30,7 @@ INSERT INTO fields (object_id, name, type, required, sort_order) VALUES
   ((SELECT id FROM objects WHERE name = 'lead'), 'Email Address', 'email', true, 1),
   ((SELECT id FROM objects WHERE name = 'lead'), 'Phone Number', 'phone', false, 2),
   ((SELECT id FROM objects WHERE name = 'lead'), 'Score', 'number', false, 4),
-  ((SELECT id FROM objects WHERE name = 'lead'), 'Notes', 'richtext', false, 6)
+  ((SELECT id FROM objects WHERE name = 'lead'), 'Notes', 'richtext', false, 7)
 ON CONFLICT (object_id, name) DO NOTHING;
 
 INSERT INTO fields (object_id, name, type, enum_values, enum_colors, sort_order) VALUES
@@ -41,7 +41,19 @@ INSERT INTO fields (object_id, name, type, enum_values, enum_colors, sort_order)
    '["Website","Referral","Cold Call","Social"]'::JSON, NULL, 5)
 ON CONFLICT (object_id, name) DO NOTHING;
 
--- 1c. MANDATORY: auto-generate PIVOT view
+-- 1b-2. Link to company object if it exists (proactive relation)
+INSERT INTO fields (object_id, name, type, related_object_id, relationship_type, sort_order)
+SELECT
+  (SELECT id FROM objects WHERE name = 'lead'),
+  'Company',
+  'relation',
+  (SELECT id FROM objects WHERE name = 'company'),
+  'many_to_one',
+  6
+WHERE EXISTS (SELECT 1 FROM objects WHERE name = 'company')
+ON CONFLICT (object_id, name) DO NOTHING;
+
+-- 1c. MANDATORY: auto-generate PIVOT view (list all non-action fields in IN clause)
 CREATE OR REPLACE VIEW v_lead AS
 PIVOT (
   SELECT e.id as entry_id, e.created_at, e.updated_at,
@@ -50,7 +62,8 @@ PIVOT (
   JOIN entry_fields ef ON ef.entry_id = e.id
   JOIN fields f ON f.id = ef.field_id
   WHERE e.object_id = (SELECT id FROM objects WHERE name = 'lead')
-) ON field_name USING first(value);
+    AND f.type != 'action'
+) ON field_name IN ('Full Name', 'Email Address', 'Phone Number', 'Status', 'Score', 'Source', 'Company', 'Notes') USING first(value);
 
 COMMIT;
 ```
@@ -60,17 +73,18 @@ COMMIT;
 ```bash
 mkdir -p {{WORKSPACE_PATH}}/lead
 
-# Query the object metadata from DuckDB to build .object.yaml
+# Query actual values from DuckDB (do NOT use placeholder strings)
 OBJ_ID=$(duckdb {{WORKSPACE_PATH}}/workspace.duckdb -noheader -list "SELECT id FROM objects WHERE name = 'lead'")
 ENTRY_COUNT=$(duckdb {{WORKSPACE_PATH}}/workspace.duckdb -noheader -list "SELECT COUNT(*) FROM entries WHERE object_id = '$OBJ_ID'")
 
-cat > {{WORKSPACE_PATH}}/lead/.object.yaml << 'YAML'
-id: "<use actual $OBJ_ID>"
+# Write .object.yaml using the actual queried values (note: no 'YAML' — we need variable expansion)
+cat > {{WORKSPACE_PATH}}/lead/.object.yaml << EOF
+id: "$OBJ_ID"
 name: "lead"
 description: "Sales leads tracking"
 icon: "user-plus"
 default_view: "table"
-entry_count: <use actual $ENTRY_COUNT>
+entry_count: $ENTRY_COUNT
 fields:
   - name: "Full Name"
     type: text
@@ -88,9 +102,13 @@ fields:
   - name: "Source"
     type: enum
     values: ["Website", "Referral", "Cold Call", "Social"]
+  - name: "Company"
+    type: relation
+    related_object: company
+    relationship_type: many_to_one
   - name: "Notes"
     type: richtext
-YAML
+EOF
 ```
 
 **Step 3 — Verify**: Confirm both the view and filesystem exist:
@@ -143,7 +161,8 @@ PIVOT (
   JOIN entry_fields ef ON ef.entry_id = e.id
   JOIN fields f ON f.id = ef.field_id
   WHERE e.object_id = (SELECT id FROM objects WHERE name = 'task')
-) ON field_name USING first(value);
+    AND f.type != 'action'
+) ON field_name IN ('Title', 'Description', 'Status', 'Priority', 'Due Date', 'Assigned To', 'Notes') USING first(value);
 
 COMMIT;
 ```
@@ -152,8 +171,10 @@ COMMIT;
 
 ```bash
 mkdir -p {{WORKSPACE_PATH}}/task
-cat > {{WORKSPACE_PATH}}/task/.object.yaml << 'YAML'
-id: "<query from DuckDB>"
+OBJ_ID=$(duckdb {{WORKSPACE_PATH}}/workspace.duckdb -noheader -list "SELECT id FROM objects WHERE name = 'task'")
+
+cat > {{WORKSPACE_PATH}}/task/.object.yaml << EOF
+id: "$OBJ_ID"
 name: "task"
 description: "Task tracking board"
 icon: "check-square"
@@ -167,10 +188,49 @@ fields:
     values: ["In Queue", "In Progress", "Done"]
   - name: "Assigned To"
     type: user
-YAML
+EOF
 ```
 
 **Step 3 — Verify:** `duckdb {{WORKSPACE_PATH}}/workspace.duckdb "SELECT COUNT(*) FROM v_task"` and `cat {{WORKSPACE_PATH}}/task/.object.yaml`.
+
+---
+
+## Proactive Relation Creation (IMPORTANT)
+
+**When creating multiple objects, ALWAYS create relation fields to link them — even if the user did not explicitly ask for it.** Real-world data is interconnected. If two objects are obviously related, link them. The user expects this; not linking them is a missed opportunity that forces manual work later.
+
+### When to create relations automatically
+
+- **People + Company** → add "Company" relation on people (many_to_one → company)
+- **Deal/Opportunity + Contact** → add "Primary Contact" relation on deal (many_to_one → people)
+- **Deal + Company** → add "Company" relation on deal (many_to_one → company)
+- **Task + Project** → add "Project" relation on task (many_to_one → project)
+- **Task + Contact/Person** → add "Related Contact" relation on task (many_to_one → people)
+- **Case + Client** → add "Client" relation on case (many_to_one → people or company)
+- **Invoice + Company** → add "Company" relation on invoice (many_to_one → company)
+- **Invoice + Deal** → add "Deal" relation on invoice (many_to_one → deal)
+- **Property + Agent** → add "Agent" relation on property (many_to_one → people)
+- **Any child object + parent object** → link child to parent
+
+**General rule**: If you're creating object B and object A already exists (or is being created alongside), ask yourself: "Would an entry in B logically belong to or reference an entry in A?" If yes, add a relation field.
+
+### Relation field SQL pattern
+
+```sql
+INSERT INTO fields (object_id, name, type, related_object_id, relationship_type, sort_order)
+VALUES (
+  (SELECT id FROM objects WHERE name = 'people'),
+  'Company',
+  'relation',
+  (SELECT id FROM objects WHERE name = 'company'),
+  'many_to_one',
+  3
+) ON CONFLICT (object_id, name) DO NOTHING;
+```
+
+Use `many_to_one` when each entry links to exactly one entry in the other object (most common). Use `many_to_many` when an entry can link to multiple entries (e.g., project → team members).
+
+**Relation fields must be created via SQL** — the API does not support the `relation` type.
 
 ---
 
@@ -178,38 +238,51 @@ YAML
 
 ### Contact/Customer
 
-- Full Name (text, required), Email Address (email, required), Phone Number (phone), Company (relation to company object), Notes (richtext)
+- Full Name (text, required), Email Address (email, required), Phone Number (phone), **Company (relation → company, many_to_one)**, Notes (richtext)
 - Universal pattern for clients, customers, patients, members
+- **Always link to company** if a company object exists or is being created
 
 ### Lead/Prospect
 
-- Full Name (text, required), Email Address (email, required), Phone Number (phone), Status (enum: New/Contacted/Qualified/Converted), Source (enum: Website/Referral/Cold Call/Social), Score (number), Assigned To (user), Notes (richtext)
+- Full Name (text, required), Email Address (email, required), Phone Number (phone), Status (enum: New/Contacted/Qualified/Converted), Source (enum: Website/Referral/Cold Call/Social), Score (number), **Company (relation → company, many_to_one)**, Assigned To (user), Notes (richtext)
 - Sales, legal intake, real estate prospects
+- **Link to company** when company object exists; **link to deal** if deal pipeline is also being set up
 
 ### Company/Organization
 
-- Company Name (text, required), Industry (enum), Website (text), Type (enum: Client/Partner/Vendor), Relationship Status (enum), Notes (richtext)
+- Company Name (text, required), Industry (enum), Website (url), Type (enum: Client/Partner/Vendor), Relationship Status (enum), Notes (richtext)
 - B2B relationships, vendor management
+- Other objects typically link TO company (people, deals, invoices), not the other way around
 
 ### Deal/Opportunity
 
-- Deal Name (text, required), Amount (number), Stage (enum: Discovery/Proposal/Negotiation/Closed Won/Closed Lost), Close Date (date), Probability (number), Primary Contact (relation), Assigned To (user), Notes (richtext)
+- Deal Name (text, required), Amount (number), Stage (enum: Discovery/Proposal/Negotiation/Closed Won/Closed Lost), Close Date (date), Probability (number), **Primary Contact (relation → people, many_to_one)**, **Company (relation → company, many_to_one)**, Assigned To (user), Notes (richtext)
 - Sales pipeline, project bids
+- **Always link to contact AND company** — a deal without a contact or company is incomplete
 
 ### Case/Project
 
-- Case Number (text, required), Title (text, required), Client (relation), Status (enum: Open/In Progress/Closed), Priority (enum: Low/Medium/High/Urgent), Due Date (date), Assigned To (user), Notes (richtext)
+- Case Number (text, required), Title (text, required), **Client (relation → people or company, many_to_one)**, Status (enum: Open/In Progress/Closed), Priority (enum: Low/Medium/High/Urgent), Due Date (date), Assigned To (user), Notes (richtext)
 - Legal cases, client projects
+- **Always link to client** (person or company depending on context)
 
 ### Property/Asset
 
-- Address (text, required), Property Type (enum), Price (number), Status (enum: Available/Under Contract/Sold), Square Footage (number), Bedrooms (number), Notes (richtext)
+- Address (text, required), Property Type (enum), Price (number), Status (enum: Available/Under Contract/Sold), Square Footage (number), Bedrooms (number), **Agent (relation → people, many_to_one)**, **Client (relation → people, many_to_one)**, Notes (richtext)
 - Real estate listings, asset management
+- **Link to agent and/or client** when people object exists
 
 ### Task/Activity (use kanban)
 
-- Title (text, required), Description (text), Assigned To (user), Due Date (date), Status (enum: In Queue/In Progress/Done), Priority (enum: Low/Medium/High), Notes (richtext)
+- Title (text, required), Description (text), Assigned To (user), Due Date (date), Status (enum: In Queue/In Progress/Done), Priority (enum: Low/Medium/High), **Related To (relation → contextual parent, many_to_one)**, Notes (richtext)
 - Use `default_view = 'kanban'` — auto-creates Status and Assigned To fields
+- **Link to parent object** (project, deal, case, etc.) whenever tasks are created alongside another object
+
+### Invoice/Payment
+
+- Invoice Number (text, required), Amount (number), Status (enum: Draft/Sent/Paid/Overdue), Due Date (date), **Company (relation → company, many_to_one)**, **Deal (relation → deal, many_to_one)**, Notes (richtext)
+- Billing, payments
+- **Always link to company and optionally to deal**
 
 ---
 
@@ -241,4 +314,48 @@ You MUST complete ALL steps below after ANY schema mutation (create/update/delet
 - [ ] Write the `.md` file to the correct path in `{{WORKSPACE_PATH}}/**`
 - [ ] `INSERT INTO documents` — ensure metadata row exists with correct `file_path`, `parent_id`, or `parent_object_id`
 
+### After adding ACTION FIELDS to an object:
+
+- [ ] `mkdir -p {{WORKSPACE_PATH}}/{object_name}/.actions/` — create the actions directory
+- [ ] **Write every script file** referenced by `scriptPath` in the action config (e.g. `.actions/send-email.js`)
+- [ ] Regenerate PIVOT view (exclude action fields with `AND f.type != 'action'`)
+- [ ] Update `.object.yaml` with the action field including `action_config`
+- [ ] Verify script files exist: `ls {{WORKSPACE_PATH}}/{object_name}/.actions/`
+
+See the **actions** child skill (`crm/actions/SKILL.md`) for the complete end-to-end action creation walkthrough.
+
 These steps ensure the filesystem always mirrors DuckDB. The sidebar depends on `.object.yaml` files — if they are missing, objects will not appear.
+
+---
+
+## Common Mistakes and Recovery
+
+### Object exists in DuckDB but doesn't appear in the sidebar
+The `.object.yaml` file is missing. Regenerate it:
+
+```bash
+OBJ_ID=$(duckdb {{WORKSPACE_PATH}}/workspace.duckdb -noheader -list "SELECT id FROM objects WHERE name = 'lead'")
+mkdir -p {{WORKSPACE_PATH}}/lead
+# Then write .object.yaml with the correct id, name, fields, and entry_count
+```
+
+### PIVOT view returns wrong columns or errors
+The `IN (...)` field list is out of date. Regenerate the view by querying current fields:
+
+```bash
+duckdb {{WORKSPACE_PATH}}/workspace.duckdb -json "SELECT name FROM fields WHERE object_id = (SELECT id FROM objects WHERE name = 'lead') AND type != 'action' ORDER BY sort_order"
+# Use the output to rebuild the IN clause in the PIVOT view
+```
+
+### `.object.yaml` is out of sync with DuckDB
+Query the current state and rewrite the file:
+
+```bash
+OBJ_ID=$(duckdb {{WORKSPACE_PATH}}/workspace.duckdb -noheader -list "SELECT id FROM objects WHERE name = 'lead'")
+ENTRY_COUNT=$(duckdb {{WORKSPACE_PATH}}/workspace.duckdb -noheader -list "SELECT COUNT(*) FROM entries WHERE object_id = '$OBJ_ID'")
+duckdb {{WORKSPACE_PATH}}/workspace.duckdb -json "SELECT name, type, required, enum_values, default_value FROM fields WHERE object_id = '$OBJ_ID' ORDER BY sort_order"
+# Use these values to rebuild .object.yaml
+```
+
+### DuckDB name doesn't match directory name
+All three must be identical: the DuckDB `objects.name`, the filesystem directory name, and `.object.yaml` `name`. If they diverge, rename them to match. See the "Renaming / Moving Objects" section in the parent CRM skill.

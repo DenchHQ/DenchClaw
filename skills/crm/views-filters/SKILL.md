@@ -30,12 +30,28 @@ fields:
   - name: "Email Address"
     type: email
     required: true
+  - name: "Website"
+    type: url
   - name: "Status"
     type: enum
     values: ["New", "Contacted", "Qualified", "Converted"]
+  - name: "Company"
+    type: relation
+    related_object: company
+    relationship_type: many_to_one
   - name: "Assigned To"
     type: user
+  - name: "Actions"
+    type: action
+    action_config:
+      actions:
+        - id: act_mark_done
+          label: "Mark Done"
+          variant: success
+          scriptPath: ".actions/mark-done.sh"
 ```
+
+**Action fields** include `action_config` (not `values` or `required`). The `action_config` mirrors the JSON stored in the field's `default_value` in DuckDB. See the **actions** skill for details.
 
 ### View Type Settings
 
@@ -122,6 +138,8 @@ Treat them as date fields for filtering, sorting, calendar, and timeline operati
 
 Append to `.object.yaml`:
 
+**IMPORTANT: The `field` value in filter rules must match the exact field name (case-sensitive) as it appears in the `fields` list, or use system column names (`created_at`, `updated_at`).**
+
 ```yaml
 views:
   - name: "Active deals"
@@ -131,13 +149,13 @@ views:
       conjunction: and
       rules:
         - id: f1
-          field: status
+          field: "Status"
           operator: is_any_of
           value:
             - "Negotiating"
             - "Proposal sent"
         - id: f2
-          field: amount
+          field: "Amount"
           operator: gte
           value: 10000
     sort:
@@ -170,11 +188,11 @@ views:
       conjunction: and
       rules:
         - id: f1
-          field: due_date
+          field: "Due Date"
           operator: before
           value: today
         - id: f2
-          field: status
+          field: "Status"
           operator: is_not
           value: Done
 
@@ -225,11 +243,11 @@ filters:
   conjunction: or
   rules:
     - id: f1
-      field: status
+      field: "Status"
       operator: is
       value: "Active"
     - id: f2
-      field: priority
+      field: "Priority"
       operator: is
       value: "High"
 ```
@@ -250,20 +268,23 @@ duckdb {{WORKSPACE_PATH}}/workspace.duckdb -json "
   FROM objects o WHERE o.name = 'lead'
 "
 duckdb {{WORKSPACE_PATH}}/workspace.duckdb -json "
-  SELECT name, type, required, enum_values FROM fields
+  SELECT name, type, required, enum_values, default_value FROM fields
   WHERE object_id = (SELECT id FROM objects WHERE name = 'lead')
   ORDER BY sort_order
 "
 
-# 2. Write .object.yaml from the query results
+# 2. Use the query results to write .object.yaml (use actual values, not placeholders)
+OBJ_ID=$(duckdb {{WORKSPACE_PATH}}/workspace.duckdb -noheader -list "SELECT id FROM objects WHERE name = 'lead'")
+ENTRY_COUNT=$(duckdb {{WORKSPACE_PATH}}/workspace.duckdb -noheader -list "SELECT COUNT(*) FROM entries WHERE object_id = '$OBJ_ID'")
+
 mkdir -p {{WORKSPACE_PATH}}/lead
-cat > {{WORKSPACE_PATH}}/lead/.object.yaml << 'YAML'
-id: "AbCdEfGh..."
+cat > {{WORKSPACE_PATH}}/lead/.object.yaml << EOF
+id: "$OBJ_ID"
 name: "lead"
 description: "Sales leads tracking"
 icon: "user-plus"
 default_view: "table"
-entry_count: 20
+entry_count: $ENTRY_COUNT
 fields:
   - name: "Full Name"
     type: text
@@ -278,5 +299,5 @@ fields:
     type: number
   - name: "Notes"
     type: richtext
-YAML
+EOF
 ```
