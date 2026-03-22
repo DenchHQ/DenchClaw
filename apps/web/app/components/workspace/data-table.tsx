@@ -43,6 +43,7 @@ import {
 	DropdownMenuCheckboxItem,
 } from "../ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { UrlFavicon } from "./url-favicon";
 
 /* ─── Types ─── */
 
@@ -83,6 +84,7 @@ export type DataTableProps<TData, TValue> = {
 	onAdd?: () => void;
 	addButtonLabel?: string;
 	onRowClick?: (row: TData, index: number) => void;
+	getFirstDataColumnFaviconUrl?: (row: Row<TData>, table: Table<TData>) => string | null | undefined;
 	rowActions?: (row: TData) => RowAction<TData>[];
 	// toolbar
 	toolbarExtra?: React.ReactNode;
@@ -198,6 +200,7 @@ export function DataTable<TData, TValue>({
 	onAdd,
 	addButtonLabel = "+ Add",
 	onRowClick,
+	getFirstDataColumnFaviconUrl,
 	rowActions,
 	toolbarExtra,
 	title,
@@ -324,6 +327,7 @@ export function DataTable<TData, TValue>({
 					/>
 				),
 				size: 40,
+				minSize: 40,
 				enableSorting: false,
 				enableHiding: false,
 			}
@@ -341,6 +345,7 @@ export function DataTable<TData, TValue>({
 					/>
 				),
 				size: 48,
+				minSize: 48,
 				enableSorting: false,
 				enableHiding: false,
 			}
@@ -419,6 +424,7 @@ export function DataTable<TData, TValue>({
 		enableSorting,
 		globalFilterFn: fuzzyFilter,
 		columnResizeMode: "onChange",
+		defaultColumn: { minSize: 150 },
 	});
 
 	const selectedCount = Object.keys(rowSelectionState).filter((k) => rowSelectionState[k]).length;
@@ -728,6 +734,7 @@ export function DataTable<TData, TValue>({
 								stickyFirstColumn={stickyFirstColumn}
 								isScrolled={isScrolled}
 								onRowClick={onRowClick}
+								getFirstDataColumnFaviconUrl={getFirstDataColumnFaviconUrl}
 							/>
 						</table>
 					</DndContext>
@@ -813,6 +820,7 @@ type DataTableBodyProps = {
 	stickyFirstColumn: boolean;
 	isScrolled: boolean;
 	onRowClick?: (row: any, index: number) => void;
+	getFirstDataColumnFaviconUrl?: (row: Row<any>, table: Table<any>) => string | null | undefined;
 };
 
 function DataTableBodyInner({
@@ -823,6 +831,7 @@ function DataTableBodyInner({
 	stickyFirstColumn,
 	isScrolled,
 	onRowClick,
+	getFirstDataColumnFaviconUrl,
 }: DataTableBodyProps) {
 	return (
 		<tbody className="[&_tr:last-child]:border-0">
@@ -866,6 +875,9 @@ function DataTableBodyInner({
 							const isSticky = stickyFirstColumn && isFirstData;
 							const isSelectCol = cell.column.id === "select";
 							const isLastCol = colIdx === visibleCells.length - 1;
+							const firstDataColumnFaviconUrl = isFirstData && !isSelectCol
+								? getFirstDataColumnFaviconUrl?.(row, table)
+								: undefined;
 
 							const rowBg = baseBg;
 							const altBg = rowIdx % 2 === 0 ? "var(--color-surface)" : "var(--color-bg)";
@@ -906,7 +918,18 @@ function DataTableBodyInner({
 									style={cellStyle}
 								>
 									<div className="overflow-hidden">
-										{flexRender(cell.column.columnDef.cell, cell.getContext())}
+										{firstDataColumnFaviconUrl ? (
+											<div className="flex min-w-0 items-center gap-1.5">
+												<span className="pointer-events-none shrink-0">
+													<UrlFavicon src={firstDataColumnFaviconUrl} />
+												</span>
+												<div className="min-w-0 flex-1 overflow-hidden">
+													{flexRender(cell.column.columnDef.cell, cell.getContext())}
+												</div>
+											</div>
+										) : (
+											flexRender(cell.column.columnDef.cell, cell.getContext())
+										)}
 									</div>
 									{isSticky && isScrolled && (
 										<div className="absolute top-0 right-0 bottom-0 w-4 translate-x-full pointer-events-none bg-linear-to-r from-black/4 to-transparent z-100" />

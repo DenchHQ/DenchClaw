@@ -17,6 +17,8 @@ import { formatWorkspaceFieldValue } from "@/lib/workspace-cell-format";
 import { parseTagsValue } from "@/lib/parse-tags";
 import { ActionButton, type ActionConfig } from "./action-button";
 import { useToast } from "./toast";
+import { UrlFavicon } from "./url-favicon";
+import { getFirstEntryUrlPreview } from "./workspace-url-preview";
 
 type Field = {
   id: string;
@@ -167,6 +169,7 @@ function CardContent({
   onToast?: (message: string, opts?: { type?: "success" | "error" | "info" }) => void;
 }) {
   const title = getEntryTitle(entry, fields);
+  const titleUrlPreview = getFirstEntryUrlPreview(entry, fields);
 
   const actionFields = fields.filter((f) => f.type === "action");
   const dataFields = fields.filter((f) => f.type !== "action");
@@ -190,10 +193,18 @@ function CardContent({
   return (
     <>
       <div
-        className="text-sm font-medium mb-1.5 truncate"
+        className="flex items-center gap-2 mb-1.5 min-w-0"
         style={{ color: "var(--color-text)" }}
       >
-        {title}
+        {titleUrlPreview?.faviconUrl && (
+          <UrlFavicon
+            src={titleUrlPreview.faviconUrl}
+            className="w-4 h-4 rounded-[4px] shrink-0"
+          />
+        )}
+        <div className="text-sm font-medium truncate min-w-0">
+          {title}
+        </div>
       </div>
       <div className="space-y-1">
         {displayFields
@@ -232,6 +243,7 @@ function CardContent({
                     {tags.slice(0, 3).map((tag) => {
                       const fmt = formatWorkspaceFieldValue(tag);
                       const isLink = fmt.kind === "link" && fmt.href;
+                      const showFavicon = fmt.linkType === "url" && !!fmt.faviconUrl;
                       return isLink ? (
                         <a
                           key={tag}
@@ -239,10 +251,16 @@ function CardContent({
                           target={fmt.linkType === "url" || fmt.linkType === "file" ? "_blank" : undefined}
                           rel={fmt.linkType === "url" || fmt.linkType === "file" ? "noopener noreferrer" : undefined}
                           onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center px-1.5 py-0 rounded text-[11px] font-medium hover:underline underline-offset-2"
+                          className="inline-flex items-center gap-1 px-1.5 py-0 rounded text-[11px] font-medium hover:underline underline-offset-2 max-w-[220px]"
                           style={{ background: "rgba(148, 163, 184, 0.12)", color: "var(--color-accent)" }}
                         >
-                          {fmt.text}
+                          {showFavicon && (
+                            <UrlFavicon
+                              src={fmt.faviconUrl!}
+                              className="w-3 h-3 rounded-[2px] shrink-0"
+                            />
+                          )}
+                          <span className="min-w-0 truncate">{fmt.text}</span>
                         </a>
                       ) : (
                         <span

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
-import { type ColumnDef, type CellContext } from "@tanstack/react-table";
+import { type ColumnDef, type CellContext, type Row } from "@tanstack/react-table";
 import { DataTable, type RowAction, type ColumnSizingState } from "./data-table";
 import { RelationSelect } from "./relation-select";
 import { FormattedFieldValue } from "./formatted-field-value";
@@ -12,6 +12,9 @@ import { ConfirmDialog } from "./confirm-dialog";
 import { BulkActionBar } from "./bulk-action-bar";
 import { useToast } from "./toast";
 import { ColumnHeaderMenu, InlineRenameInput, AddColumnPopover, FieldTypeIcon } from "./column-header-menu";
+import { UrlFavicon } from "./url-favicon";
+import { LinkOpenButton } from "./link-open-button";
+import { LinkPreviewWrapper } from "./workspace-link";
 
 /* ─── Types ─── */
 
@@ -70,9 +73,11 @@ type ObjectTableProps = {
 };
 
 type EntryRow = Record<string, unknown> & { entry_id?: string };
+type EntryRowCell = ReturnType<Row<EntryRow>["getVisibleCells"]>[number];
 
 const CREATED_AT_KEYS = ["created_at", "Created", "createdAt", "created"] as const;
 const UPDATED_AT_KEYS = ["updated_at", "Updated", "updatedAt", "updated"] as const;
+const FIXED_TABLE_COLUMN_IDS = new Set(["select", "actions", "__add_column"]);
 
 /* ─── Helpers ─── */
 
@@ -126,6 +131,43 @@ function resolveEntryMetaValue(
 			return value;
 		}
 	}
+	return undefined;
+}
+
+function getColumnFieldType(meta: unknown): string | undefined {
+	if (!meta || typeof meta !== "object") {
+		return undefined;
+	}
+	const fieldType = (meta as { fieldType?: unknown }).fieldType;
+	return typeof fieldType === "string" ? fieldType : undefined;
+}
+
+function getCellFaviconUrl(cell: EntryRowCell): string | undefined {
+	const formatted = formatWorkspaceFieldValue(
+		cell.getValue(),
+		getColumnFieldType(cell.column.columnDef.meta),
+	);
+	return formatted.kind === "link" && formatted.linkType === "url"
+		? formatted.faviconUrl
+		: undefined;
+}
+
+function getFirstUrlColumnFaviconUrl(row: Row<EntryRow>): string | undefined {
+	const candidateCells = row.getVisibleCells().filter(
+		(cell) => !FIXED_TABLE_COLUMN_IDS.has(cell.column.id),
+	);
+	const urlTypedCells = candidateCells.filter(
+		(cell) => getColumnFieldType(cell.column.columnDef.meta) === "url",
+	);
+	const cellsToCheck = urlTypedCells.length > 0 ? urlTypedCells : candidateCells;
+
+	for (const cell of cellsToCheck) {
+		const faviconUrl = getCellFaviconUrl(cell);
+		if (faviconUrl) {
+			return faviconUrl;
+		}
+	}
+
 	return undefined;
 }
 
@@ -205,20 +247,32 @@ function RelationCell({
 function TagChip({ tag }: { tag: string }) {
 	const formatted = formatWorkspaceFieldValue(tag);
 	const isLink = formatted.kind === "link" && formatted.href;
+	const showFavicon = formatted.linkType === "url" && !!formatted.faviconUrl;
+	const openInNewTab = formatted.linkType === "url" || formatted.linkType === "file";
 	const chipStyle = { background: "rgba(148, 163, 184, 0.12)", border: "1px solid var(--color-border)" };
 	if (isLink) {
-		return (
-			<a
-				href={formatted.href!}
-				target={formatted.linkType === "url" || formatted.linkType === "file" ? "_blank" : undefined}
-				rel={formatted.linkType === "url" || formatted.linkType === "file" ? "noopener noreferrer" : undefined}
-				onClick={(e) => e.stopPropagation()}
-				className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium underline-offset-2 hover:underline"
+		const chip = (
+			<span
+				className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium max-w-[200px]"
 				style={{ ...chipStyle, color: "var(--color-accent)" }}
 			>
-				{formatted.text}
-			</a>
+				{showFavicon && (
+					<UrlFavicon
+						src={formatted.faviconUrl!}
+						className="w-3.5 h-3.5 rounded-[3px] shrink-0"
+					/>
+				)}
+				<span className="min-w-0 truncate">{formatted.text}</span>
+				<LinkOpenButton
+					href={formatted.href}
+					openInNewTab={openInNewTab}
+					className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm hover:bg-black/5"
+				/>
+			</span>
 		);
+		return formatted.linkType === "url" ? (
+			<LinkPreviewWrapper href={formatted.href}>{chip}</LinkPreviewWrapper>
+		) : chip;
 	}
 	return (
 		<span
@@ -361,6 +415,7 @@ function EditableCell({
 	onNavigateEntry,
 	onLocalValueChange,
 	onSaved,
+	showUrlFavicon = false,
 }: {
 	value: unknown;
 	entryId: string;
@@ -373,6 +428,7 @@ function EditableCell({
 	onNavigateEntry?: (objectName: string, entryId: string) => void;
 	onLocalValueChange?: (value: string) => void;
 	onSaved?: () => void;
+	showUrlFavicon?: boolean;
 }) {
 	const [editing, setEditing] = useState(false);
 	const [localValue, setLocalValue] = useState(safeString(initialValue));
@@ -575,7 +631,13 @@ function EditableCell({
 			) : field.type === "boolean" ? (
 				<BooleanCell value={displayValue} />
 			) : (
-				<FormattedFieldValue value={displayValue} fieldType={field.type} mode="table" />
+				<FormattedFieldValue
+					value={displayValue}
+					fieldType={field.type}
+					mode="table"
+					showUrlFavicon={showUrlFavicon}
+					linkInteractionMode="button"
+				/>
 			)}
 		</div>
 	);
@@ -725,7 +787,7 @@ export function ObjectTable({
 		const cols: ColumnDef<EntryRow>[] = dataFields.map((field, fieldIdx) => ({
 			id: field.id,
 			accessorKey: field.name,
-			meta: { label: field.name, fieldName: field.name },
+			meta: { label: field.name, fieldName: field.name, fieldType: field.type },
 			header: ({ column }: { column: { getIsSorted: () => "asc" | "desc" | false; toggleSorting: (desc: boolean) => void; toggleVisibility: (visible: boolean) => void } }) => {
 				if (renamingFieldId === field.id) {
 					return (
@@ -796,17 +858,18 @@ export function ObjectTable({
 						onNavigateEntry={onNavigateToEntry}
 						onLocalValueChange={(value) => updateLocalEntryField(entryId, field.name, value)}
 						onSaved={onRefresh}
+						showUrlFavicon={fieldIdx !== 0}
 					/>
 				);
 			},
-			size: field.type === "richtext" ? 300 : field.type === "relation" || field.type === "tags" ? 200 : 180,
+			size: field.type === "richtext" ? 300 : field.type === "relation" || field.type === "tags" ? 220 : 200,
 			enableSorting: true,
 		}));
 
 		cols.push({
 			id: "created_at",
 			accessorFn: (row) => resolveEntryMetaValue(row, CREATED_AT_KEYS),
-			meta: { label: "Created", fieldName: "created_at" },
+			meta: { label: "Created", fieldName: "created_at", fieldType: "date" },
 			header: () => (
 				<span className="flex items-center gap-1" style={{ color: "var(--color-text-muted)" }}>
 					Created
@@ -822,7 +885,7 @@ export function ObjectTable({
 		cols.push({
 			id: "updated_at",
 			accessorFn: (row) => resolveEntryMetaValue(row, UPDATED_AT_KEYS),
-			meta: { label: "Updated", fieldName: "updated_at" },
+			meta: { label: "Updated", fieldName: "updated_at", fieldType: "date" },
 			header: () => (
 				<span className="flex items-center gap-1" style={{ color: "var(--color-text-muted)" }}>
 					Updated
@@ -839,7 +902,7 @@ export function ObjectTable({
 		for (const rr of activeReverseRelations) {
 			cols.push({
 				id: `rev_${rr.sourceObjectName}_${rr.fieldName}`,
-				meta: { label: `${rr.sourceObjectName} (via ${rr.fieldName})` },
+				meta: { label: `${rr.sourceObjectName} (via ${rr.fieldName})`, fieldType: "relation" },
 				header: () => (
 					<span className="flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
 						<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}>
@@ -872,7 +935,7 @@ export function ObjectTable({
 			if (actions.length === 0) continue;
 			cols.push({
 				id: `action_${af.id}`,
-				meta: { label: af.name, fieldName: af.name },
+				meta: { label: af.name, fieldName: af.name, fieldType: "action" },
 				header: () => (
 					<span className="flex items-center gap-1" style={{ color: "var(--color-text-muted)" }}>
 						{af.name}
@@ -920,6 +983,7 @@ export function ObjectTable({
 			),
 			cell: () => null,
 			size: 44,
+			minSize: 44,
 			enableSorting: false,
 			enableHiding: false,
 			enableResizing: false,
@@ -1056,13 +1120,14 @@ export function ObjectTable({
 			rowActions={getRowActions}
 			stickyFirstColumn
 			activeRowId={activeEntryId}
-			getRowId={(row) => String((row as EntryRow).entry_id ?? "")}
+			getRowId={(row) => String(row.entry_id ?? "")}
 			initialColumnVisibility={columnVisibility}
 			onColumnVisibilityChanged={onColumnVisibilityChanged}
 			initialColumnSizing={columnSizing}
 			onColumnSizingChange={onColumnSizingChanged}
 			serverPagination={serverPagination}
 			onServerSearch={onServerSearch}
+			getFirstDataColumnFaviconUrl={getFirstUrlColumnFaviconUrl}
 		/>
 
 		<BulkActionBar

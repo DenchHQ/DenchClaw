@@ -7,6 +7,8 @@ import {
 	min as dateMin, max as dateMax, addMonths, subMonths,
 } from "date-fns";
 import type { TimelineZoom } from "@/lib/object-filters";
+import { UrlFavicon } from "./url-favicon";
+import { getFirstEntryUrlPreview } from "./workspace-url-preview";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -23,6 +25,7 @@ type Field = {
 type TimelineItem = {
 	id: string;
 	title: string;
+	faviconUrl?: string;
 	startDate: Date;
 	endDate: Date;
 	group?: string;
@@ -135,6 +138,7 @@ function parseItems(
 			items.push({
 				id: safeString(entry.entry_id ?? entry.id),
 				title: resolveTitle(entry, fields),
+				faviconUrl: getFirstEntryUrlPreview(entry, fields)?.faviconUrl,
 				startDate,
 				endDate,
 				group: groupField ? safeString(entry[groupField]) : undefined,
@@ -305,7 +309,15 @@ function DraggableBar({
 				/>
 			)}
 
-			<span className="px-2 truncate flex-1">{renderW > 60 ? (item.title || "Untitled") : ""}</span>
+			<span className="px-2 flex min-w-0 items-center gap-1.5 flex-1">
+				{item.faviconUrl && renderW > 84 && (
+					<UrlFavicon
+						src={item.faviconUrl}
+						className="w-3 h-3 rounded-[2px] shrink-0"
+					/>
+				)}
+				<span className="truncate">{renderW > 60 ? (item.title || "Untitled") : ""}</span>
+			</span>
 
 			{/* Right resize handle */}
 			{editable && (
@@ -465,7 +477,17 @@ export function ObjectTimeline({
 								}}
 								onClick={() => row.item && onEntryClick?.(row.item.id)}
 							>
-								{row.type === "group" ? row.group : row.item?.title || "Untitled"}
+								{row.type === "group" ? row.group : (
+									<span className="flex min-w-0 items-center gap-1.5">
+										{row.item?.faviconUrl && (
+											<UrlFavicon
+												src={row.item.faviconUrl}
+												className="w-3.5 h-3.5 rounded-[3px] shrink-0"
+											/>
+										)}
+										<span className="truncate">{row.item?.title || "Untitled"}</span>
+									</span>
+								)}
 							</div>
 						))}
 					</div>

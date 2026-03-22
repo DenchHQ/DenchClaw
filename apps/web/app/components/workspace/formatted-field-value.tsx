@@ -2,12 +2,17 @@
 
 import { Fragment } from "react";
 import { formatWorkspaceFieldValue } from "@/lib/workspace-cell-format";
+import { UrlFavicon } from "./url-favicon";
+import { LinkOpenButton } from "./link-open-button";
+import { WorkspaceLink, LinkPreviewWrapper } from "./workspace-link";
 
 type FormattedFieldValueProps = {
 	value: unknown;
 	fieldType?: string;
 	mode?: "table" | "detail";
 	className?: string;
+	showUrlFavicon?: boolean;
+	linkInteractionMode?: "inline" | "button";
 };
 
 function EmptyValue() {
@@ -63,7 +68,19 @@ function normalizeNewlines(text: string): string {
  * For text/richtext fields, uses heuristic detection so URLs, emails,
  * phone numbers are rendered as clickable links.
  */
-function FormattedSegment({ text, fieldType }: { text: string; fieldType?: string }) {
+function FormattedSegment({
+	text,
+	fieldType,
+	showUrlFavicon = false,
+	linkInteractionMode = "inline",
+	isTableMode = false,
+}: {
+	text: string;
+	fieldType?: string;
+	showUrlFavicon?: boolean;
+	linkInteractionMode?: "inline" | "button";
+	isTableMode?: boolean;
+}) {
 	const trimmed = text.trim();
 	if (!trimmed) {return <>{text}</>;}
 	const detectType = !fieldType || fieldType === "text" || fieldType === "richtext" ? undefined : fieldType;
@@ -78,16 +95,34 @@ function FormattedSegment({ text, fieldType }: { text: string; fieldType?: strin
 			return <>{fmt.text}</>;
 		}
 		const openInNewTab = fmt.linkType === "url" || fmt.linkType === "file";
+		const showFavicon = showUrlFavicon && fmt.linkType === "url" && !!fmt.faviconUrl;
+		if (linkInteractionMode === "button") {
+			const buttonContent = (
+				<span
+					className="inline-flex min-w-0 max-w-full items-center gap-1.5 align-middle"
+					style={{ color: "var(--color-accent)" }}
+				>
+					{showFavicon && <UrlFavicon src={fmt.faviconUrl!} />}
+					<span className={isTableMode ? "min-w-0 truncate" : "min-w-0 break-all"}>{fmt.text}</span>
+					<LinkOpenButton
+						href={fmt.href}
+						openInNewTab={openInNewTab}
+						className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm hover:bg-black/5"
+					/>
+				</span>
+			);
+			return fmt.linkType === "url" ? (
+				<LinkPreviewWrapper href={fmt.href}>{buttonContent}</LinkPreviewWrapper>
+			) : buttonContent;
+		}
 		return (
-			<a
+			<WorkspaceLink
 				href={fmt.href}
-				{...(openInNewTab ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-				className="underline underline-offset-2"
-				style={{ color: "var(--color-accent)" }}
-				onClick={(e) => e.stopPropagation()}
-			>
-				{fmt.text}
-			</a>
+				text={fmt.text}
+				linkType={fmt.linkType ?? "url"}
+				faviconUrl={fmt.faviconUrl}
+				showFavicon={showFavicon}
+			/>
 		);
 	}
 
@@ -103,6 +138,8 @@ export function FormattedFieldValue({
 	fieldType,
 	mode = "table",
 	className,
+	showUrlFavicon = false,
+	linkInteractionMode = "inline",
 }: FormattedFieldValueProps) {
 	const formatted = formatWorkspaceFieldValue(value, fieldType);
 	const isTableMode = mode === "table";
@@ -122,7 +159,13 @@ export function FormattedFieldValue({
 				{lines.map((line, i) => (
 					<Fragment key={i}>
 						{i > 0 && <br />}
-						<FormattedSegment text={line} fieldType={fieldType} />
+						<FormattedSegment
+							text={line}
+							fieldType={fieldType}
+							showUrlFavicon={showUrlFavicon}
+							linkInteractionMode={linkInteractionMode}
+							isTableMode={isTableMode}
+						/>
 					</Fragment>
 				))}
 			</span>
@@ -135,17 +178,47 @@ export function FormattedFieldValue({
 	if (formatted.kind === "link" && formatted.href) {
 		const openInNewTab = formatted.linkType === "url" || formatted.linkType === "file";
 		const canEmbedInModal = !isTableMode && !!formatted.embedUrl && !!formatted.mediaType;
+		const showFavicon = showUrlFavicon && formatted.linkType === "url" && !!formatted.faviconUrl;
+		if (linkInteractionMode === "button") {
+			const buttonContent = (
+				<div className={isTableMode ? "block max-w-[300px]" : "w-full"}>
+					<span
+						className="flex w-full min-w-0 items-center gap-1.5"
+						style={{ color: "var(--color-accent)" }}
+					>
+						{showFavicon && <UrlFavicon src={formatted.faviconUrl!} />}
+						<span className={isTableMode ? "min-w-0 truncate" : "min-w-0 break-all"}>
+							{formatted.text}
+						</span>
+						<LinkOpenButton
+							href={formatted.href}
+							openInNewTab={openInNewTab}
+						/>
+					</span>
+					{canEmbedInModal && (
+						<FileEmbed
+							mediaType={formatted.mediaType!}
+							url={formatted.embedUrl!}
+							label={formatted.text}
+						/>
+					)}
+				</div>
+			);
+			return formatted.linkType === "url" ? (
+				<LinkPreviewWrapper href={formatted.href}>{buttonContent}</LinkPreviewWrapper>
+			) : buttonContent;
+		}
 		return (
-			<div className={isTableMode ? "truncate block max-w-[300px]" : "w-full"}>
-				<a
+			<div className={isTableMode ? "block max-w-[300px]" : "w-full"}>
+				<WorkspaceLink
 					href={formatted.href}
-					{...(openInNewTab ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-					className={`underline underline-offset-2 ${isTableMode ? "truncate block" : ""}`}
-					style={{ color: "var(--color-accent)" }}
-					onClick={(e) => e.stopPropagation()}
-				>
-					{formatted.text}
-				</a>
+					text={formatted.text}
+					linkType={formatted.linkType ?? "url"}
+					faviconUrl={formatted.faviconUrl}
+					showFavicon={showFavicon}
+					layout="block"
+					className={isTableMode ? "truncate" : ""}
+				/>
 				{canEmbedInModal && (
 					<FileEmbed
 						mediaType={formatted.mediaType!}

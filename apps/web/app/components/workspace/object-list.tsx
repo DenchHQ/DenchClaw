@@ -3,6 +3,8 @@
 import { useMemo } from "react";
 import { formatWorkspaceFieldValue } from "@/lib/workspace-cell-format";
 import { parseTagsValue } from "@/lib/parse-tags";
+import { UrlFavicon } from "./url-favicon";
+import { getFirstEntryUrlPreview } from "./workspace-url-preview";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -80,6 +82,7 @@ function ListRow({
 }) {
 	const entryId = safeString(entry.entry_id ?? entry.id);
 	const title = resolveTitle(entry, fields, titleField);
+	const titleUrlPreview = getFirstEntryUrlPreview(entry, fields);
 
 	const subtitle = useMemo(() => {
 		if (subtitleField) {
@@ -118,12 +121,20 @@ function ListRow({
 			{/* Content */}
 			<div className="flex-1 min-w-0">
 				<div className="flex items-center gap-2">
-					<span
-						className="text-[13px] font-medium truncate group-hover:underline"
-						style={{ color: "var(--color-text)" }}
-					>
-						{title || "Untitled"}
-					</span>
+					<div className="flex min-w-0 items-center gap-2">
+						{titleUrlPreview?.faviconUrl && (
+							<UrlFavicon
+								src={titleUrlPreview.faviconUrl}
+								className="w-4 h-4 rounded-[4px] shrink-0"
+							/>
+						)}
+						<span
+							className="text-[13px] font-medium truncate group-hover:underline"
+							style={{ color: "var(--color-text)" }}
+						>
+							{title || "Untitled"}
+						</span>
+					</div>
 					{badge && (
 						<span
 							className="text-[10px] px-2 py-0.5 rounded-full flex-shrink-0"
@@ -135,6 +146,7 @@ function ListRow({
 					{tagsVal.slice(0, 3).map((tag) => {
 						const fmt = formatWorkspaceFieldValue(tag);
 						const isLink = fmt.kind === "link" && fmt.href;
+						const showFavicon = fmt.linkType === "url" && !!fmt.faviconUrl;
 						return isLink ? (
 							<a
 								key={tag}
@@ -142,10 +154,16 @@ function ListRow({
 								target={fmt.linkType === "url" || fmt.linkType === "file" ? "_blank" : undefined}
 								rel={fmt.linkType === "url" || fmt.linkType === "file" ? "noopener noreferrer" : undefined}
 								onClick={(e) => e.stopPropagation()}
-								className="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 hover:underline underline-offset-2"
+								className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 hover:underline underline-offset-2 max-w-[220px]"
 								style={{ background: "rgba(148, 163, 184, 0.12)", color: "var(--color-accent)", border: "1px solid var(--color-border)" }}
 							>
-								{fmt.text}
+								{showFavicon && (
+									<UrlFavicon
+										src={fmt.faviconUrl!}
+										className="w-3 h-3 rounded-[2px] shrink-0"
+									/>
+								)}
+								<span className="min-w-0 truncate">{fmt.text}</span>
 							</a>
 						) : (
 							<span

@@ -5,6 +5,8 @@ import { RelationSelect } from "./relation-select";
 import { FormattedFieldValue } from "./formatted-field-value";
 import { formatWorkspaceFieldValue } from "@/lib/workspace-cell-format";
 import { parseTagsValue } from "@/lib/parse-tags";
+import { UrlFavicon } from "./url-favicon";
+import { LinkOpenButton } from "./link-open-button";
 
 
 function safeString(val: unknown): string {
@@ -222,19 +224,28 @@ function TagsBadges({ value }: { value: unknown }) {
       {tags.map((tag) => {
         const formatted = formatWorkspaceFieldValue(tag);
         const isLink = formatted.kind === "link" && formatted.href;
+        const showFavicon = formatted.linkType === "url" && !!formatted.faviconUrl;
+        const openInNewTab = formatted.linkType === "url" || formatted.linkType === "file";
         if (isLink) {
           return (
-            <a
+            <span
               key={tag}
-              href={formatted.href!}
-              target={formatted.linkType === "url" || formatted.linkType === "file" ? "_blank" : undefined}
-              rel={formatted.linkType === "url" || formatted.linkType === "file" ? "noopener noreferrer" : undefined}
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium underline-offset-2 hover:underline"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium max-w-[240px]"
               style={{ ...chipStyle, color: "var(--color-accent)" }}
             >
-              {formatted.text}
-            </a>
+              {showFavicon && (
+                <UrlFavicon
+                  src={formatted.faviconUrl!}
+                  className="w-3.5 h-3.5 rounded-[3px] shrink-0"
+                />
+              )}
+              <span className="min-w-0 truncate">{formatted.text}</span>
+              <LinkOpenButton
+                href={formatted.href}
+                openInNewTab={openInNewTab}
+                className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm hover:bg-black/5"
+              />
+            </span>
           );
         }
         return (
@@ -431,11 +442,11 @@ function FieldValue({
     case "phone":
     case "url":
     case "file":
-      return <FormattedFieldValue value={value} fieldType={field.type} mode="detail" />;
+      return <FormattedFieldValue value={value} fieldType={field.type} mode="detail" showUrlFavicon linkInteractionMode="button" />;
     case "richtext":
-      return <FormattedFieldValue value={value} fieldType={field.type} mode="detail" />;
+      return <FormattedFieldValue value={value} fieldType={field.type} mode="detail" showUrlFavicon linkInteractionMode="button" />;
     default:
-      return <FormattedFieldValue value={value} fieldType={field.type} mode="detail" />;
+      return <FormattedFieldValue value={value} fieldType={field.type} mode="detail" showUrlFavicon linkInteractionMode="button" />;
   }
 }
 

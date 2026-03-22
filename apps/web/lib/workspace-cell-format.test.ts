@@ -59,6 +59,9 @@ describe("formatWorkspaceFieldValue", () => {
 		expect(result.kind).toBe("link");
 		expect(result.linkType).toBe("url");
 		expect(result.href).toBe("https://www.example.com");
+		expect(result.faviconUrl).toBe(
+			"https://www.google.com/s2/favicons?domain=www.example.com&sz=32",
+		);
 	});
 
 	it("identifies workspace file links and includes embed metadata", () => {
@@ -84,6 +87,34 @@ describe("formatWorkspaceFieldValue", () => {
 		const result = formatWorkspaceFieldValue("https://example.com", "richtext");
 		expect(result.kind).toBe("text");
 		expect(result.text).toBe("https://example.com");
+	});
+
+	it("adds favicon metadata for schema URL fields", () => {
+		const result = formatWorkspaceFieldValue("https://docs.openclaw.ai/guide", "url");
+		expect(result.kind).toBe("link");
+		expect(result.linkType).toBe("url");
+		expect(result.faviconUrl).toBe(
+			"https://www.google.com/s2/favicons?domain=docs.openclaw.ai&sz=32",
+		);
+	});
+
+	it("omits favicon for non-http protocols (prevents leaking ftp/file URLs to Google)", () => {
+		const result = formatWorkspaceFieldValue("ftp://files.example.com/data.csv", "url");
+		expect(result.faviconUrl).toBeUndefined();
+	});
+
+	it("omits favicon for workspace file paths (internal files have no domain)", () => {
+		const result = formatWorkspaceFieldValue("/?path=docs%2Fdeck.pdf", "text");
+		expect(result.kind).toBe("link");
+		expect(result.linkType).toBe("file");
+		expect(result.faviconUrl).toBeUndefined();
+	});
+
+	it("produces a valid favicon URL for domains with special characters", () => {
+		const result = formatWorkspaceFieldValue("https://example.com/page?q=1&r=2", "url");
+		expect(result.faviconUrl).toBe(
+			"https://www.google.com/s2/favicons?domain=example.com&sz=32",
+		);
 	});
 });
 

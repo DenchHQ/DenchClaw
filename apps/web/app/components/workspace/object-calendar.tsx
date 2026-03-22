@@ -11,6 +11,8 @@ import {
 	addMinutes,
 } from "date-fns";
 import type { CalendarMode } from "@/lib/object-filters";
+import { UrlFavicon } from "./url-favicon";
+import { getFirstEntryUrlPreview } from "./workspace-url-preview";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,6 +29,7 @@ type Field = {
 type CalendarEvent = {
 	id: string;
 	title: string;
+	faviconUrl?: string;
 	date: Date;
 	endDate?: Date;
 	entry: Record<string, unknown>;
@@ -103,6 +106,7 @@ function parseEvents(
 			events.push({
 				id: safeString(entry.entry_id ?? entry.id),
 				title: resolveTitle(entry, fields),
+				faviconUrl: getFirstEntryUrlPreview(entry, fields)?.faviconUrl,
 				date,
 				endDate,
 				entry,
@@ -180,8 +184,16 @@ function EventChip({
 			}}
 			title={event.title}
 		>
-			{!compact && <span className="opacity-70 mr-1">{format(event.date, "HH:mm")}</span>}
-			{event.title || "Untitled"}
+			<span className="flex min-w-0 items-center gap-1">
+				{!compact && <span className="opacity-70 shrink-0">{format(event.date, "HH:mm")}</span>}
+				{event.faviconUrl && (
+					<UrlFavicon
+						src={event.faviconUrl}
+						className="w-3 h-3 rounded-[2px] shrink-0"
+					/>
+				)}
+				<span className="truncate">{event.title || "Untitled"}</span>
+			</span>
 		</button>
 	);
 }
@@ -432,7 +444,15 @@ function DraggableTimeEvent({
 			onClick={(e) => { if (!dragging) { e.stopPropagation(); onEntryClick?.(event.id); } }}
 			title={event.title}
 		>
-			{event.title || "Untitled"}
+			<span className="flex min-w-0 items-center gap-1">
+				{event.faviconUrl && (
+					<UrlFavicon
+						src={event.faviconUrl}
+						className="w-3 h-3 rounded-[2px] shrink-0"
+					/>
+				)}
+				<span className="truncate">{event.title || "Untitled"}</span>
+			</span>
 			{/* Resize handle at bottom */}
 			{onEntryDateChange && (
 				<div

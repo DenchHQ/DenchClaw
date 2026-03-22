@@ -4,6 +4,8 @@ import { useMemo } from "react";
 import { FormattedFieldValue } from "./formatted-field-value";
 import { formatWorkspaceFieldValue } from "@/lib/workspace-cell-format";
 import { parseTagsValue } from "@/lib/parse-tags";
+import { UrlFavicon } from "./url-favicon";
+import { getFirstEntryUrlPreview } from "./workspace-url-preview";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,6 +83,7 @@ function GalleryCard({
 }) {
 	const entryId = safeString(entry.entry_id ?? entry.id);
 	const title = resolveTitle(entry, fields, titleField);
+	const titleUrlPreview = getFirstEntryUrlPreview(entry, fields);
 
 	// Show up to 4 non-title fields
 	const displayFields = useMemo(() => {
@@ -106,12 +109,20 @@ function GalleryCard({
 		>
 			{/* Title + badge row */}
 			<div className="flex items-start justify-between gap-2 mb-2">
-				<h4
-					className="text-[13px] font-semibold leading-tight line-clamp-2 group-hover:underline"
-					style={{ color: "var(--color-text)" }}
-				>
-					{title || "Untitled"}
-				</h4>
+				<div className="flex min-w-0 items-start gap-2">
+					{titleUrlPreview?.faviconUrl && (
+						<UrlFavicon
+							src={titleUrlPreview.faviconUrl}
+							className="w-4 h-4 rounded-[4px] shrink-0 mt-0.5"
+						/>
+					)}
+					<h4
+						className="text-[13px] font-semibold leading-tight line-clamp-2 group-hover:underline"
+						style={{ color: "var(--color-text)" }}
+					>
+						{title || "Untitled"}
+					</h4>
+				</div>
 				{badge && (
 					<span
 						className="text-[10px] px-2 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap"
@@ -142,8 +153,17 @@ function GalleryCard({
 										{tags.slice(0, 3).map((tag) => {
 											const fmt = formatWorkspaceFieldValue(tag);
 											const isLink = fmt.kind === "link" && fmt.href;
+											const showFavicon = fmt.linkType === "url" && !!fmt.faviconUrl;
 											return isLink ? (
-												<a key={tag} href={fmt.href!} target={fmt.linkType === "url" || fmt.linkType === "file" ? "_blank" : undefined} rel={fmt.linkType === "url" || fmt.linkType === "file" ? "noopener noreferrer" : undefined} onClick={(e) => e.stopPropagation()} className="inline-flex items-center px-1.5 py-0 rounded text-[11px] font-medium hover:underline underline-offset-2" style={{ background: "rgba(148, 163, 184, 0.12)", color: "var(--color-accent)" }}>{fmt.text}</a>
+												<a key={tag} href={fmt.href!} target={fmt.linkType === "url" || fmt.linkType === "file" ? "_blank" : undefined} rel={fmt.linkType === "url" || fmt.linkType === "file" ? "noopener noreferrer" : undefined} onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1 px-1.5 py-0 rounded text-[11px] font-medium hover:underline underline-offset-2 max-w-[220px]" style={{ background: "rgba(148, 163, 184, 0.12)", color: "var(--color-accent)" }}>
+													{showFavicon && (
+														<UrlFavicon
+															src={fmt.faviconUrl!}
+															className="w-3 h-3 rounded-[2px] shrink-0"
+														/>
+													)}
+													<span className="min-w-0 truncate">{fmt.text}</span>
+												</a>
 											) : (
 												<span key={tag} className="inline-flex items-center px-1.5 py-0 rounded text-[11px] font-medium" style={{ background: "rgba(148, 163, 184, 0.12)", color: "var(--color-text-muted)" }}>{tag}</span>
 											);
@@ -151,7 +171,7 @@ function GalleryCard({
 										{tags.length > 3 && <span className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>+{tags.length - 3}</span>}
 									</span>
 								) : (
-									<FormattedFieldValue value={val} fieldType={field.type} mode="table" />
+									<FormattedFieldValue value={val} fieldType={field.type} mode="table" showUrlFavicon />
 								)}
 							</div>
 						</div>

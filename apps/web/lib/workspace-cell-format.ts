@@ -13,6 +13,7 @@ export type FormattedWorkspaceValue = {
 	filePath?: string;
 	mediaType?: WorkspaceMediaType;
 	embedUrl?: string;
+	faviconUrl?: string;
 	numericValue?: number;
 	isoDate?: string;
 };
@@ -175,6 +176,22 @@ function normalizeUrl(raw: string): string | null {
 	}
 }
 
+function buildGoogleFaviconUrl(href: string): string | undefined {
+	try {
+		const url = new URL(href);
+		if (url.protocol !== "http:" && url.protocol !== "https:") {
+			return undefined;
+		}
+		const domain = url.hostname.trim();
+		if (!domain) {
+			return undefined;
+		}
+		return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`;
+	} catch {
+		return undefined;
+	}
+}
+
 function normalizePhone(raw: string): string | null {
 	const trimmed = raw.trim();
 	if (!PHONE_RE.test(trimmed)) {
@@ -325,6 +342,7 @@ function formatBySchema(raw: string, fieldType: string): FormattedWorkspaceValue
 				href,
 				mediaType: detectFileMediaType(href),
 				embedUrl: href,
+				faviconUrl: buildGoogleFaviconUrl(href),
 			};
 		}
 	}
@@ -417,6 +435,7 @@ function formatByHeuristics(raw: string): FormattedWorkspaceValue {
 			href: url,
 			mediaType: detectFileMediaType(url),
 			embedUrl: url,
+			faviconUrl: buildGoogleFaviconUrl(url),
 		};
 	}
 
