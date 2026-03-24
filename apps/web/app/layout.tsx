@@ -9,6 +9,10 @@ export const metadata: Metadata = {
   title: "DenchClaw",
   description:
     "AI Workspace with an agent that connects to your apps and does the work for you",
+  icons: {
+    icon: "/dench-workspace-icon.png",
+    apple: "/dench-workspace-icon.png",
+  },
 };
 
 export const viewport: Viewport = {
