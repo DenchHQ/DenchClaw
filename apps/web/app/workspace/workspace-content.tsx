@@ -492,7 +492,7 @@ function WorkspacePageInner() {
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"files" | "chats">("files");
-  const [chatSidebarOpen, setChatSidebarOpen] = useState(false);
+  const [chatSidebarOpen, setChatSidebarOpen] = useState(true);
   const [mobileChatSessionsOpen, setMobileChatSessionsOpen] = useState(false);
   const [mobileFileChatOpen, setMobileFileChatOpen] = useState(false);
 
