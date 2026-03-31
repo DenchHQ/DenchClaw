@@ -59,7 +59,7 @@ import {
   HOME_TAB_ID, HOME_TAB,
   generateTabId, loadTabs, saveTabs, openTab, closeTab,
   closeOtherTabs, closeTabsToRight, closeAllTabs,
-  activateTab, reorderTabs, togglePinTab,
+  activateTab, reorderTabs, togglePinTab, makeTabPermanent,
   inferTabType, inferTabTitle,
 } from "@/lib/tab-state";
 import {
@@ -412,11 +412,8 @@ export function WorkspaceShell() {
 function WorkspacePageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const initialPathHandled = useRef(false);
-  // Counts how many renders have happened since hydration completed.
-  // The URL sync effect skips render 0 (the same render where hydration ran)
-  // because React state (activePath, etc.) hasn't updated yet.
-  const rendersSinceHydration = useRef(-1);
+  const hydrationPhase = useRef<"init" | "hydrated">("init");
+  const postHydrationRender = useRef(false);
   const lastPushedQs = useRef<string | null>(null);
 
   // Visible main chat panel ref for session management
@@ -520,11 +517,10 @@ function WorkspacePageInner() {
     setChatRuntimeSnapshots({});
   }, [workspaceName]);
 
-  // Persist tabs to localStorage on change (only after initial load for this workspace)
+  // Persist tabs to localStorage on change (only after hydration completes)
   useEffect(() => {
-    const key = workspaceName || null;
-    if (tabLoadedForWorkspace.current !== key) return;
-    saveTabs(tabState, key);
+    if (hydrationPhase.current !== "hydrated") return;
+    saveTabs(tabState, workspaceName || null);
   }, [tabState, workspaceName]);
 
   useEffect(() => {
@@ -562,7 +558,17 @@ function WorkspacePageInner() {
     setContent({ kind: "none" });
     setActiveSessionId(null);
     setActiveSubagentKey(null);
-    setTabState((prev) => openTab(prev, tab));
+    setTabState((prev) => openTab(prev, tab, { preview: true }));
+    return tab;
+  }, []);
+
+  const openPermanentBlankChatTab = useCallback(() => {
+    const tab = createBlankChatTab();
+    setActivePath(null);
+    setContent({ kind: "none" });
+    setActiveSessionId(null);
+    setActiveSubagentKey(null);
+    setTabState((prev) => openTab(prev, tab, { preview: false }));
     return tab;
   }, []);
 
@@ -571,7 +577,7 @@ function WorkspacePageInner() {
     setContent({ kind: "none" });
     setActiveSessionId(sessionId);
     setActiveSubagentKey(null);
-    setTabState((prev) => openOrFocusParentChatTab(prev, { sessionId, title }));
+    setTabState((prev) => openOrFocusParentChatTab(prev, { sessionId, title }, { preview: true }));
   }, []);
 
   const openSubagentChatTab = useCallback((params: {
@@ -583,7 +589,7 @@ function WorkspacePageInner() {
     setContent({ kind: "none" });
     setActiveSessionId(params.parentSessionId);
     setActiveSubagentKey(params.sessionKey);
-    setTabState((prev) => openOrFocusSubagentChatTab(prev, params));
+    setTabState((prev) => openOrFocusSubagentChatTab(prev, params, { preview: true }));
   }, []);
 
   const openGatewayChatTab = useCallback((sessionKey: string, sessionId: string, channel?: string, title?: string) => {
@@ -597,7 +603,24 @@ function WorkspacePageInner() {
       sessionId,
       channel: channel ?? "unknown",
       title: title ?? "Channel Chat",
-    }));
+    }, { preview: true }));
+  }, []);
+
+  const promoteTabById = useCallback((tabId: string | null | undefined) => {
+    if (!tabId || tabId === HOME_TAB_ID) {
+      return;
+    }
+    setTabState((prev) => makeTabPermanent(prev, tabId));
+  }, []);
+
+  const promoteTabByPath = useCallback((path: string | null | undefined) => {
+    if (!path) {
+      return;
+    }
+    setTabState((prev) => {
+      const matchingTab = prev.tabs.find((tab) => tab.path === path);
+      return matchingTab ? makeTabPermanent(prev, matchingTab.id) : prev;
+    });
   }, []);
 
   const visibleMainChatTabId = useMemo(() => {
@@ -729,7 +752,7 @@ function WorkspacePageInner() {
       title: inferTabTitle(node.path, node.name),
       path: node.path,
     };
-    setTabState((prev) => openTab(prev, tab));
+    setTabState((prev) => openTab(prev, tab, { preview: true }));
   }, []);
 
   // Resizable sidebar widths (desktop only; persisted in localStorage).
@@ -1048,17 +1071,52 @@ function WorkspacePageInner() {
       try {
         if (node.type === "object") {
           const name = objectNameFromPath(node.path);
-          const res = await fetch(`/api/workspace/objects/${encodeURIComponent(name)}`);
-          if (!res.ok) {
-            const errData = await res.json().catch(() => ({}));
-            if (errData.code === "DUCKDB_NOT_INSTALLED") {
-              setContent({ kind: "duckdb-missing" });
-              return;
+          const fetchObject = async (): Promise<
+            | { status: "ok"; data: ObjectData }
+            | { status: "retryable" }
+            | { status: "duckdb-missing" }
+            | { status: "fatal" }
+          > => {
+            const res = await fetch(`/api/workspace/objects/${encodeURIComponent(name)}`);
+            if (!res.ok) {
+              const errData = await res.json().catch(() => ({}));
+              if (errData.code === "DUCKDB_NOT_INSTALLED") {
+                return { status: "duckdb-missing" };
+              }
+              if (res.status === 404 || res.status >= 500) {
+                return { status: "retryable" };
+              }
+              return { status: "fatal" };
             }
+            return { status: "ok", data: await res.json() };
+          };
+
+          let result = await fetchObject();
+          if (result.status === "retryable") {
+            await new Promise((r) => setTimeout(r, 150));
+            result = await fetchObject();
+          }
+          if (result.status === "duckdb-missing") {
+            setContent({ kind: "duckdb-missing" });
+            return;
+          }
+          if (result.status !== "ok") {
             setContent({ kind: "none" });
             return;
           }
-          const data: ObjectData = await res.json();
+
+          let data = result.data;
+          if (data.fields.length === 0 && data.entries.length > 0) {
+            await new Promise((r) => setTimeout(r, 200));
+            const retry = await fetchObject();
+            if (retry.status === "duckdb-missing") {
+              setContent({ kind: "duckdb-missing" });
+              return;
+            }
+            if (retry.status === "ok") {
+              data = retry.data;
+            }
+          }
           setContent({ kind: "object", data });
         } else if (node.type === "document") {
           // Use virtual-file API for ~skills/ paths
@@ -1188,6 +1246,7 @@ function WorkspacePageInner() {
         // not from the stale node snapshot.
         if (node.type === "folder") {
           setBrowseDir(node.path);
+          openTabForNode(node);
           setActivePath(node.path);
           setContent({ kind: "directory", node: { name: node.name, path: node.path, type: "folder" } });
           return;
@@ -1236,12 +1295,13 @@ function WorkspacePageInner() {
       setContent({ kind: "none" });
       return;
     }
-    if (tab.type === "chat") {
+    if (tab.type === "chat" || tab.type === "gateway-chat") {
       setActivePath(null);
       setContent({ kind: "none" });
       const identity = resolveChatIdentityForTab(tab);
       setActiveSessionId(identity.sessionId);
       setActiveSubagentKey(identity.subagentKey);
+      setActiveGatewaySessionKey(identity.gatewaySessionKey);
       return;
     }
     if (tab.path) {
@@ -1276,13 +1336,16 @@ function WorkspacePageInner() {
         const chatTabs = next.tabs.filter((t) => t.id !== HOME_TAB_ID && isChatTab(t));
         const hasBlankChat = chatTabs.some((t) => !t.sessionId && !t.sessionKey);
         if (!hasBlankChat) {
-          const blank = createBlankChatTab();
-          next = { tabs: [...next.tabs, blank], activeTabId: HOME_TAB_ID };
+          next = {
+            ...openTab(next, createBlankChatTab(), { preview: true }),
+            activeTabId: HOME_TAB_ID,
+          };
         }
         return next;
       });
       setActiveSessionId(null);
       setActiveSubagentKey(null);
+      setActiveGatewaySessionKey(null);
       applyActivatedTab(undefined);
       return;
     }
@@ -1356,8 +1419,8 @@ function WorkspacePageInner() {
     });
   }, []);
 
-  const handleTabReorder = useCallback((from: number, to: number) => {
-    setTabState((prev) => reorderTabs(prev, from, to));
+  const handleTabReorder = useCallback((tabId: string, from: number, to: number) => {
+    setTabState((prev) => reorderTabs(makeTabPermanent(prev, tabId), from, to));
   }, []);
 
   const handleTabTogglePin = useCallback((tabId: string) => {
@@ -1567,7 +1630,21 @@ function WorkspacePageInner() {
   const handleGoToChat = useCallback(() => {
     setActivePath(null);
     setContent({ kind: "none" });
-    setTabState((prev) => activateTab(prev, HOME_TAB_ID));
+    setActiveSessionId(null);
+    setActiveSubagentKey(null);
+    setActiveGatewaySessionKey(null);
+    setTabState((prev) => {
+      let next = activateTab(prev, HOME_TAB_ID);
+      const chatTabs = next.tabs.filter((t) => t.id !== HOME_TAB_ID && isChatTab(t));
+      const hasBlankChat = chatTabs.some((t) => !t.sessionId && !t.sessionKey);
+      if (!hasBlankChat) {
+        next = {
+          ...openTab(next, createBlankChatTab(), { preview: true }),
+          activeTabId: HOME_TAB_ID,
+        };
+      }
+      return next;
+    });
   }, []);
 
   // Insert a file mention into the chat editor when a sidebar item is dropped on the chat input.
@@ -1580,10 +1657,16 @@ function WorkspacePageInner() {
   // Handle file search selection: navigate sidebar to the file's location and open it
   const handleFileSearchSelect = useCallback(
     (item: { name: string; path: string; type: string }) => {
+      const node: TreeNode = {
+        name: item.name,
+        path: item.path,
+        type: item.type as TreeNode["type"],
+      };
       if (item.type === "folder") {
         // Navigate the sidebar into the folder and show it in the main panel.
         // Children come from the live tree (same data source as the sidebar).
         setBrowseDir(item.path);
+        openTabForNode(node);
         setActivePath(item.path);
         setContent({ kind: "directory", node: { name: item.name, path: item.path, type: "folder" } });
       } else {
@@ -1591,15 +1674,11 @@ function WorkspacePageInner() {
         const parentOfFile = item.path.split("/").slice(0, -1).join("/") || "/";
         setBrowseDir(parentOfFile);
         // Open the file in the main panel
-        const node: TreeNode = {
-          name: item.name,
-          path: item.path,
-          type: item.type as TreeNode["type"],
-        };
+        openTabForNode(node);
         void loadContent(node);
       }
     },
-    [setBrowseDir, loadContent],
+    [setBrowseDir, openTabForNode, loadContent],
   );
 
   // Sync URL bar with active content / chat / browse / subagent / preview state.
@@ -1607,20 +1686,18 @@ function WorkspacePageInner() {
   // avoid a circular dependency (searchParams updates → effect fires →
   // router.replace → searchParams updates → …).
   //
-  // IMPORTANT: Skip until hydration is done. On initial load, state is all
-  // null/default while the URL still carries the user's deep-link params.
-  // Writing the URL before hydration would wipe those params.
+  // Gated by hydrationPhase: skips entirely until hydration is done.
+  // On the first render after hydration, skips once (via postHydrationRender)
+  // because React state (activePath, etc.) hasn't propagated yet.
   //
   // This effect only manages shell-level params (path, chat, browse, etc.)
   // and preserves object-view params (viewType, filters, search, sort, etc.)
   // that are managed by ObjectView's own URL sync effect.
   useEffect(() => {
-    if (!initialPathHandled.current) return;
+    if (hydrationPhase.current !== "hydrated") return;
 
-    // Skip the render where hydration just ran — React state (activePath, etc.)
-    // hasn't updated yet, so we'd compute empty params and wipe the URL.
-    if (rendersSinceHydration.current === 0) {
-      rendersSinceHydration.current = 1;
+    if (postHydrationRender.current) {
+      postHydrationRender.current = false;
       return;
     }
 
@@ -1649,7 +1726,7 @@ function WorkspacePageInner() {
       const url = nextQs ? `/?${nextQs}` : "/";
       router.push(url, { scroll: false });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes searchParams to avoid infinite loop
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes searchParams to avoid infinite loop; hydrationPhase is a ref gate
   }, [activePath, activeSessionId, activeSubagentKey, fileChatSessionId, browseDir, showHidden, chatSidebarPreview, router, cronView, cronCalMode, cronDate, cronRunFilter, cronRun]);
 
   // Terminal URL sync — independent of workspace hydration so it works app-wide.
@@ -1687,17 +1764,19 @@ function WorkspacePageInner() {
     router.replace(qs ? `/?${qs}` : "/", { scroll: false });
   }, [searchParams, router]);
 
-  // Hydrate state from URL query params after tree loads.
-  // Handles path, chat, subagent, entry, browse, hidden, and preview.
-  // Always marks hydration complete so the URL-write effect can activate.
+  // Hydrate state from URL query params after tree and tabs are ready.
+  // Waits for BOTH prerequisites before running:
+  //   1. tree loaded (!treeLoading && tree.length > 0)
+  //   2. tabs loaded from localStorage (tabLoadedForWorkspace matches)
+  // Runs exactly once, then transitions hydrationPhase to 'hydrated'.
   useEffect(() => {
-    if (initialPathHandled.current || treeLoading || tree.length === 0) return;
+    if (hydrationPhase.current !== "init") return;
+    if (treeLoading || tree.length === 0) return;
+    if (tabLoadedForWorkspace.current !== (workspaceName || null)) return;
 
-    rendersSinceHydration.current = 0;
     const urlState = parseUrlState(searchParams);
 
     if (urlState.path) {
-      initialPathHandled.current = true;
       const node = resolveNode(tree, urlState.path);
       if (node) {
         openTabForNode(node);
@@ -1725,7 +1804,6 @@ function WorkspacePageInner() {
         setFileChatSessionId(urlState.fileChat);
       }
     } else if (urlState.chat) {
-      initialPathHandled.current = true;
       if (urlState.subagent) {
         openSubagentChatTab({
           sessionKey: urlState.subagent,
@@ -1736,14 +1814,15 @@ function WorkspacePageInner() {
         openSessionChatTab(urlState.chat);
       }
     } else {
-      // No path or chat param — mark hydration done (bare / or browse-only)
-      initialPathHandled.current = true;
+      const restoredTab = tabState.tabs.find((t) => t.id === tabState.activeTabId);
+      if (restoredTab && restoredTab.id !== HOME_TAB_ID) {
+        applyActivatedTab(restoredTab);
+      }
     }
 
     if (urlState.entry) {
       setEntryModal(urlState.entry);
     }
-
     if (urlState.browse) {
       setBrowseDir(urlState.browse);
     }
@@ -1766,7 +1845,11 @@ function WorkspacePageInner() {
     if (urlState.terminal) {
       setTerminalOpen(true);
     }
-  }, [tree, treeLoading, searchParams, loadContent, setBrowseDir, setShowHidden, loadSidebarPreviewFromNode]);
+
+    postHydrationRender.current = true;
+    hydrationPhase.current = "hydrated";
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrationPhase is a ref gate, runs exactly once
+  }, [tree, treeLoading, searchParams, workspaceName, tabState, loadContent, applyActivatedTab, setBrowseDir, setShowHidden, loadSidebarPreviewFromNode]);
 
   // Handle browser back/forward navigation.
   // When the user clicks Back/Forward, the URL changes but the app doesn't
@@ -1820,7 +1903,19 @@ function WorkspacePageInner() {
         setContent({ kind: "none" });
         setActiveSessionId(null);
         setActiveSubagentKey(null);
-        setTabState((prev) => activateTab(prev, HOME_TAB_ID));
+        setActiveGatewaySessionKey(null);
+        setTabState((prev) => {
+          let next = activateTab(prev, HOME_TAB_ID);
+          const chatTabs = next.tabs.filter((t) => t.id !== HOME_TAB_ID && isChatTab(t));
+          const hasBlankChat = chatTabs.some((t) => !t.sessionId && !t.sessionKey);
+          if (!hasBlankChat) {
+            next = {
+              ...openTab(next, createBlankChatTab(), { preview: true }),
+              activeTabId: HOME_TAB_ID,
+            };
+          }
+          return next;
+        });
       }
 
       if (urlState.entry) {
@@ -1940,9 +2035,11 @@ function WorkspacePageInner() {
         return null;
       }
       const node = findObjectNode(tree);
-      if (node) {void loadContent(node);}
+      if (node) {
+        handleNodeSelect(node);
+      }
     },
-    [tree, loadContent],
+    [tree, handleNodeSelect],
   );
 
   /**
@@ -2173,7 +2270,10 @@ function WorkspacePageInner() {
   }, [stopParentSession, stopSubagentSession, tabState.tabs]);
 
   // Whether to show the main chat workspace instead of file/object content.
-  const showMainChat = activeTab.type === "chat" || activeTab.type === "gateway-chat" || activeTab.id === HOME_TAB_ID || (!activePath || content.kind === "none");
+  const showMainChat = activeTab.type === "chat"
+    || activeTab.type === "gateway-chat"
+    || activeTab.id === HOME_TAB_ID
+    || (!activePath && content.kind === "none");
 
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
@@ -2218,7 +2318,7 @@ function WorkspacePageInner() {
               setSidebarOpen(false);
             }}
             onNewChatSession={() => {
-              openBlankChatTab();
+              openPermanentBlankChatTab();
               setSidebarOpen(false);
             }}
             onSelectChatSubagent={handleSelectSubagent}
@@ -2290,7 +2390,7 @@ function WorkspacePageInner() {
                   openSessionChatTab(sessionId, session?.title);
                 }}
                 onNewChatSession={() => {
-                  openBlankChatTab();
+                  openPermanentBlankChatTab();
                 }}
                 onSelectChatSubagent={handleSelectSubagent}
                 onDeleteChatSession={handleDeleteSession}
@@ -2393,7 +2493,7 @@ function WorkspacePageInner() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => openBlankChatTab()}
+                      onClick={() => openPermanentBlankChatTab()}
                       className="p-1.5 rounded-lg flex-shrink-0"
                       style={{ color: "var(--color-text-muted)" }}
                       title="New chat"
@@ -2428,7 +2528,10 @@ function WorkspacePageInner() {
                           {isLive && (
                             <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
                           )}
-                          <span className="truncate max-w-[120px]">
+                          <span
+                            className="truncate max-w-[120px]"
+                            style={{ fontStyle: tab.preview ? "italic" : "normal" }}
+                          >
                             {tab.title.length > 20 ? tab.title.slice(0, 20) + "..." : tab.title}
                           </span>
                         </button>
@@ -2465,9 +2568,10 @@ function WorkspacePageInner() {
                 onCloseAll={handleTabCloseAll}
                 onReorder={handleTabReorder}
                 onTogglePin={handleTabTogglePin}
+                onMakePermanent={promoteTabById}
                 liveChatTabIds={liveChatTabIds}
                 onStopTab={handleStopChatTab}
-                onNewTab={openBlankChatTab}
+                onNewTab={openPermanentBlankChatTab}
                 rightContent={showMainChat ? (
                   <>
                     {visibleMainChatTabId && liveChatTabIds.has(visibleMainChatTabId) && (
@@ -2595,6 +2699,7 @@ function WorkspacePageInner() {
                         initialSessionId={isGateway ? undefined : (tab.sessionKey ? undefined : tab.sessionId ?? undefined)}
                         onActiveSessionChange={isGateway || tab.sessionKey ? undefined : (id) => handleChatTabSessionChange(tab.id, id)}
                         onSessionsChange={isGateway ? undefined : refreshSessions}
+                        onConversationActivity={() => promoteTabById(tab.id)}
                         onSubagentClick={handleSubagentClickFromChat}
                         onFilePathClick={handleFilePathClickFromChat}
                         onDeleteSession={isGateway || tab.sessionKey ? undefined : handleDeleteSession}
@@ -2647,6 +2752,7 @@ function WorkspacePageInner() {
                     cronRun={cronRun}
                     onCronRunChange={setCronRun}
                     onSendCommand={handleCronSendCommand}
+                    onMakeTabPermanent={promoteTabByPath}
                   />
                 </div>
               )}
@@ -2721,7 +2827,7 @@ function WorkspacePageInner() {
                     openSessionChatTab(sessionId, session?.title);
                   }}
                   onNewSession={() => {
-                    openBlankChatTab();
+                    openPermanentBlankChatTab();
                   }}
                   onSelectSubagent={handleSelectSubagent}
                   onDeleteSession={handleDeleteSession}
@@ -2828,7 +2934,7 @@ function WorkspacePageInner() {
               setMobileChatSessionsOpen(false);
             }}
             onNewSession={() => {
-              openBlankChatTab();
+              openPermanentBlankChatTab();
               setMobileChatSessionsOpen(false);
             }}
             onSelectSubagent={(key) => {
@@ -3264,6 +3370,7 @@ function ContentRenderer({
   cronRun,
   onCronRunChange,
   onSendCommand,
+  onMakeTabPermanent,
 }: {
   content: ContentState;
   workspaceExists: boolean;
@@ -3294,6 +3401,7 @@ function ContentRenderer({
   cronRun: number | null;
   onCronRunChange: (run: number | null) => void;
   onSendCommand: (message: string) => void;
+  onMakeTabPermanent: (path: string) => void;
 }) {
   switch (content.kind) {
     case "loading":
@@ -3325,6 +3433,7 @@ function ContentRenderer({
           onSave={onRefreshTree}
           onNavigate={onNavigate}
           searchFn={searchFn}
+          onDirty={activePath ? () => onMakeTabPermanent(activePath) : undefined}
         />
       );
 
@@ -3343,6 +3452,7 @@ function ContentRenderer({
           content={content.data.content}
           filename={content.filename}
           filePath={content.filePath}
+          onDirty={content.filePath ? () => onMakeTabPermanent(content.filePath) : undefined}
         />
       );
 
@@ -3362,6 +3472,7 @@ function ContentRenderer({
           url={content.url}
           filename={content.filename}
           filePath={content.filePath}
+          onDirty={() => onMakeTabPermanent(content.filePath)}
         />
       );
 
@@ -3468,6 +3579,7 @@ function ContentRenderer({
           initialHtml={content.html}
           filePath={content.filePath}
           onSave={onRefreshTree}
+          onDirty={() => onMakeTabPermanent(content.filePath)}
         />
       );
 

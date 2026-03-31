@@ -2054,7 +2054,7 @@ body {
 }
 .dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab:hover .chrome-tab-background > svg .chrome-tab-geometry,
 .dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab[data-context] .chrome-tab-background > svg .chrome-tab-geometry {
-  fill: #eae9e7;
+  fill: var(--color-surface-hover);
 }
 .dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab[active] .chrome-tab-background > svg .chrome-tab-geometry {
   fill: var(--color-surface);
@@ -2065,6 +2065,9 @@ body {
 }
 .dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab[active] .chrome-tab-title {
   color: var(--color-text);
+}
+.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab[data-preview="true"] .chrome-tab-title {
+  font-style: italic;
 }
 .dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab .chrome-tab-dividers::before,
 .dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab .chrome-tab-dividers::after {

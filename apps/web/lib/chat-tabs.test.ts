@@ -63,6 +63,20 @@ describe("chat tab helpers", () => {
     expect(next.tabs.find((tab) => tab.id === sibling.id)?.sessionId).toBe("existing-1");
   });
 
+  it("focuses the existing parent chat tab instead of creating a duplicate session tab", () => {
+    const draft = createBlankChatTab();
+    const existing = createParentChatTab({ sessionId: "existing-1", title: "Existing" });
+    const state = {
+      tabs: [HOME_TAB, draft, existing],
+      activeTabId: draft.id,
+    } satisfies TabState;
+
+    const next = bindParentSessionToChatTab(state, draft.id, "existing-1");
+
+    expect(next.tabs.map((tab) => tab.id)).toEqual([HOME_TAB.id, existing.id]);
+    expect(next.activeTabId).toBe(existing.id);
+  });
+
   it("closes a deleted parent session and all of its subagent tabs (prevents orphan child tabs)", () => {
     const parent = createParentChatTab({ sessionId: "parent-1", title: "Parent" });
     const child = createSubagentChatTab({

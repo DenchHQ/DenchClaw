@@ -829,6 +829,8 @@ type ChatPanelProps = {
 	hideHeaderActions?: boolean;
 	/** Called whenever the panel's runtime state changes. */
 	onRuntimeStateChange?: (state: ChatPanelRuntimeState) => void;
+	/** Called when the conversation advances and the hosting tab should persist. */
+	onConversationActivity?: () => void;
 	/** Gateway session key for channel sessions (telegram, discord, etc.). */
 	gatewaySessionKey?: string;
 	/** Gateway session UUID for loading transcripts. */
@@ -860,6 +862,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			onBack,
 			hideHeaderActions,
 			onRuntimeStateChange,
+			onConversationActivity,
 			gatewaySessionKey,
 			gatewaySessionId,
 			gatewayChannel: _gatewayChannel,
@@ -1640,6 +1643,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					return;
 				}
 
+				onConversationActivity?.();
+
 				// Queue the message if the agent is still running.
 				if (isStreaming) {
 					if (!overrideAttachments) {
@@ -1755,6 +1760,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				sendMessage,
 				gatewaySessionKey,
 				attemptReconnect,
+				onConversationActivity,
 			],
 		);
 
@@ -1906,6 +1912,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			loadSession: handleSessionSelect,
 			newSession: async () => { handleNewSession(); },
 				sendNewMessage: async (text: string) => {
+					onConversationActivity?.();
 					handleNewSession();
 					const title =
 						text.length > 60 ? text.slice(0, 60) + "..." : text;
@@ -1921,7 +1928,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					editorRef.current?.insertFileMention(name, path);
 				},
 			}),
-			[handleSessionSelect, handleNewSession, createSession, onActiveSessionChange, onSessionsChange, sendMessage],
+			[handleSessionSelect, handleNewSession, createSession, onActiveSessionChange, onSessionsChange, onConversationActivity, sendMessage],
 		);
 
 		// ── Stop handler (aborts server-side run + client-side stream) ──

@@ -37,6 +37,7 @@ export type RichDocumentEditorProps = {
   initialHtml: string;
   filePath: string;
   onSave?: () => void;
+  onDirty?: () => void;
   /** Compact mode for sidebar preview rendering */
   compact?: boolean;
 };
@@ -70,6 +71,7 @@ export function RichDocumentEditor({
   initialHtml,
   filePath,
   onSave,
+  onDirty,
   compact,
 }: RichDocumentEditorProps) {
   const [saving, setSaving] = useState(false);
@@ -121,6 +123,7 @@ export function RichDocumentEditor({
     onUpdate: () => {
       setIsDirty(true);
       setSaveStatus("idle");
+      onDirty?.();
     },
   });
 

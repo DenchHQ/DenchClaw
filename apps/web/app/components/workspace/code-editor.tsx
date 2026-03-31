@@ -185,9 +185,10 @@ type CodeEditorProps = {
 	filename: string;
 	filePath?: string;
 	className?: string;
+	onDirty?: () => void;
 };
 
-export function MonacoCodeEditor({ content, filename, filePath, className }: CodeEditorProps) {
+export function MonacoCodeEditor({ content, filename, filePath, className, onDirty }: CodeEditorProps) {
 	const ext = extFromFilename(filename);
 
 	if (ext === "diff" || ext === "patch") {
@@ -198,12 +199,12 @@ export function MonacoCodeEditor({ content, filename, filePath, className }: Cod
 		);
 	}
 
-	return <EditorInner content={content} filename={filename} filePath={filePath} className={className} />;
+	return <EditorInner content={content} filename={filename} filePath={filePath} className={className} onDirty={onDirty} />;
 }
 
 type SaveState = "clean" | "dirty" | "saving" | "saved" | "error";
 
-function EditorInner({ content, filename, filePath, className }: CodeEditorProps) {
+function EditorInner({ content, filename, filePath, className, onDirty }: CodeEditorProps) {
 	const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
 	const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
 	const [theme, setTheme] = useState<string>(isDarkMode() ? "denchclaw-dark" : "denchclaw-light");
@@ -271,13 +272,14 @@ function EditorInner({ content, filename, filePath, className }: CodeEditorProps
 			const current = ed.getValue();
 			if (current !== currentContentRef.current) {
 				setSaveState("dirty");
+				onDirty?.();
 			} else {
 				setSaveState("clean");
 			}
 		});
 
 		ed.focus();
-	}, [saveFile]);
+	}, [saveFile, onDirty]);
 
 	// Apply theme when it changes
 	useEffect(() => {

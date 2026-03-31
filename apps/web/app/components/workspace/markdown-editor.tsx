@@ -31,6 +31,7 @@ export type MarkdownEditorProps = {
   filePath: string;
   tree: TreeNode[];
   onSave?: () => void;
+  onDirty?: () => void;
   onNavigate?: (path: string) => void;
   /** Optional search function from useSearchIndex for fuzzy @ mention search. */
   searchFn?: MentionSearchFn;
@@ -50,6 +51,7 @@ export function MarkdownEditor({
   filePath,
   tree,
   onSave,
+  onDirty,
   onNavigate,
   searchFn,
 }: MarkdownEditorProps) {
@@ -117,6 +119,7 @@ export function MarkdownEditor({
     onUpdate: () => {
       setIsDirty(true);
       setSaveStatus("idle");
+      onDirty?.();
     },
   });
 

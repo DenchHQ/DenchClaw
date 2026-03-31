@@ -2,7 +2,6 @@ import {
   duckdbPathAsync,
   parseRelationValue,
   resolveDuckdbBin,
-  findDuckDBForObjectAsync,
   duckdbQueryOnFileAsync,
   discoverDuckDBPathsAsync,
   getObjectViews,
@@ -114,6 +113,34 @@ function tryParseJson(value: unknown): unknown {
 /** SQL-escape a string (double single-quotes). */
 function sqlEscape(s: string): string {
   return s.replace(/'/g, "''");
+}
+
+/**
+ * Find both the DB file and object row, retrying once for transient DuckDB misses.
+ * This avoids a false 404 when the existence probe or row fetch briefly returns [].
+ */
+async function findObjectRecord(
+  objectName: string,
+): Promise<{ dbFile: string; object: ObjectRow } | null> {
+  const dbPaths = await discoverDuckDBPathsAsync();
+  if (dbPaths.length === 0) {return null;}
+
+  const objectSql = `SELECT * FROM objects WHERE name = '${sqlEscape(objectName)}' LIMIT 1`;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (const dbFile of dbPaths) {
+      const objects = await q<ObjectRow>(dbFile, objectSql);
+      if (objects.length > 0) {
+        return { dbFile, object: objects[0] };
+      }
+    }
+
+    if (attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -336,9 +363,11 @@ export async function GET(
     );
   }
 
-  // Find which DuckDB file contains this object (searches all discovered DBs)
-  const dbFile = await findDuckDBForObjectAsync(name);
-  if (!dbFile) {
+  // Find which DuckDB file contains this object (searches all discovered DBs).
+  // Query the full object row directly so a transient empty existence probe
+  // does not incorrectly downgrade the request to 404.
+  const objectRecord = await findObjectRecord(name);
+  if (!objectRecord) {
     // Fall back to primary DB check for a friendlier error message
     if (!await duckdbPathAsync()) {
       return Response.json(
@@ -352,34 +381,37 @@ export async function GET(
     );
   }
 
+  const { dbFile, object: obj } = objectRecord;
+
   // Ensure display_field column exists on this specific DB
   await ensureDisplayFieldColumn(dbFile);
-
-  // All queries below target the specific DB that owns this object
-  const objects = await q<ObjectRow>(dbFile,
-    `SELECT * FROM objects WHERE name = '${name}' LIMIT 1`,
-  );
-
-  if (objects.length === 0) {
-    return Response.json(
-      { error: `Object '${name}' not found` },
-      { status: 404 },
-    );
-  }
-
-  const obj = objects[0];
 
   // Keep same-DB schema reads sequential: parallel DuckDB CLI processes against
   // one file can intermittently return empty results, which makes the object
   // page oscillate between full and partial schemas during live refreshes.
-  const fields = await q<FieldRow>(
+  // Retry once after a short delay if fields come back empty (DuckDB concurrency).
+  let fields = await q<FieldRow>(
     dbFile,
     `SELECT * FROM fields WHERE object_id = '${obj.id}' ORDER BY sort_order`,
   );
-  const statuses = await q<StatusRow>(
+  if (fields.length === 0) {
+    await new Promise((r) => setTimeout(r, 100));
+    fields = await q<FieldRow>(
+      dbFile,
+      `SELECT * FROM fields WHERE object_id = '${obj.id}' ORDER BY sort_order`,
+    );
+  }
+  let statuses = await q<StatusRow>(
     dbFile,
     `SELECT * FROM statuses WHERE object_id = '${obj.id}' ORDER BY sort_order`,
   );
+  if (statuses.length === 0 && fields.length > 0) {
+    await new Promise((r) => setTimeout(r, 50));
+    statuses = await q<StatusRow>(
+      dbFile,
+      `SELECT * FROM statuses WHERE object_id = '${obj.id}' ORDER BY sort_order`,
+    );
+  }
 
   // --- Parse filter/sort/pagination query params ---
   const url = new URL(_req.url);

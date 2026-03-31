@@ -39,6 +39,7 @@ type SpreadsheetEditorProps = {
   filename: string;
   filePath: string;
   compact?: boolean;
+  onDirty?: () => void;
 };
 
 type SheetState = {
@@ -402,6 +403,7 @@ export function SpreadsheetEditor({
   filename,
   filePath,
   compact = false,
+  onDirty,
 }: SpreadsheetEditorProps) {
   const [sheets, setSheets] = useState<SheetState[] | null>(null);
   const [activeSheet, setActiveSheet] = useState(0);
@@ -502,8 +504,9 @@ export function SpreadsheetEditor({
         return next;
       });
       setDirty(true);
+      onDirty?.();
     },
-    [activeSheet],
+    [activeSheet, onDirty],
   );
 
   const handleChange = useCallback(

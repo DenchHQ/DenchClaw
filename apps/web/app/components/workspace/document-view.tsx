@@ -60,6 +60,7 @@ type DocumentViewProps = {
   filePath?: string;
   tree?: TreeNode[];
   onSave?: () => void;
+  onDirty?: () => void;
   onNavigate?: (path: string) => void;
   searchFn?: MentionSearchFn;
 };
@@ -70,6 +71,7 @@ export function DocumentView({
   filePath,
   tree,
   onSave,
+  onDirty,
   onNavigate,
   searchFn,
 }: DocumentViewProps) {
@@ -94,6 +96,7 @@ export function DocumentView({
           filePath={filePath}
           tree={tree ?? []}
           onSave={onSave}
+          onDirty={onDirty}
           onNavigate={onNavigate}
           searchFn={searchFn}
         />

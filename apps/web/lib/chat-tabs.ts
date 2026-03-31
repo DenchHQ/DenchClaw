@@ -1,6 +1,7 @@
 import {
   type Tab,
   type TabState,
+  type TabOpenOptions,
   generateTabId,
   openTab,
 } from "./tab-state";
@@ -52,6 +53,26 @@ export function bindParentSessionToChatTab(
   tabId: string,
   sessionId: string | null,
 ): TabState {
+  const existingTab = sessionId
+    ? state.tabs.find((tab) =>
+      tab.id !== tabId &&
+      tab.type === "chat" &&
+      !tab.sessionKey &&
+      tab.sessionId === sessionId,
+    )
+    : undefined;
+
+  if (existingTab) {
+    const currentTab = state.tabs.find((tab) => tab.id === tabId);
+    const tabs = currentTab && !currentTab.pinned
+      ? state.tabs.filter((tab) => tab.id !== tabId)
+      : state.tabs;
+    return {
+      tabs,
+      activeTabId: existingTab.id,
+    };
+  }
+
   return {
     ...state,
     tabs: state.tabs.map((tab) =>
@@ -126,15 +147,17 @@ export function syncSubagentChatTabTitles(
 export function openOrFocusParentChatTab(
   state: TabState,
   params: { sessionId: string; title?: string },
+  options?: TabOpenOptions,
 ): TabState {
-  return openTab(state, createParentChatTab(params));
+  return openTab(state, createParentChatTab(params), options);
 }
 
 export function openOrFocusSubagentChatTab(
   state: TabState,
   params: { sessionKey: string; parentSessionId: string; title?: string },
+  options?: TabOpenOptions,
 ): TabState {
-  return openTab(state, createSubagentChatTab(params));
+  return openTab(state, createSubagentChatTab(params), options);
 }
 
 export function closeChatTabsForSession(
@@ -181,8 +204,9 @@ export function isGatewayChatTab(tab: Tab | undefined | null): tab is Tab {
 export function openOrFocusGatewayChatTab(
   state: TabState,
   params: { sessionKey: string; sessionId: string; channel: string; title?: string },
+  options?: TabOpenOptions,
 ): TabState {
-  return openTab(state, createGatewayChatTab(params));
+  return openTab(state, createGatewayChatTab(params), options);
 }
 
 export function resolveChatIdentityForTab(tab: Tab | undefined | null): {

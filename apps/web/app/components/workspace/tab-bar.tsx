@@ -27,8 +27,9 @@ type TabBarProps = {
   onCloseOthers: (tabId: string) => void;
   onCloseToRight: (tabId: string) => void;
   onCloseAll: () => void;
-  onReorder: (fromIndex: number, toIndex: number) => void;
+  onReorder: (tabId: string, fromIndex: number, toIndex: number) => void;
   onTogglePin: (tabId: string) => void;
+  onMakePermanent?: (tabId: string) => void;
   liveChatTabIds?: Set<string>;
   onStopTab?: (tabId: string) => void;
   onNewTab?: () => void;
@@ -64,6 +65,7 @@ export function TabBar({
   onCloseAll,
   onReorder,
   onTogglePin,
+  onMakePermanent,
   liveChatTabIds,
   onStopTab,
   onNewTab,
@@ -104,8 +106,11 @@ export function TabBar({
     };
   }, []);
 
-  const homeTab = tabs.find((t) => t.id === HOME_TAB_ID);
   const nonHomeTabs = useMemo(() => tabs.filter((t) => t.id !== HOME_TAB_ID), [tabs]);
+  const previewTabIds = useMemo(
+    () => new Set(nonHomeTabs.filter((tab) => tab.preview).map((tab) => tab.id)),
+    [nonHomeTabs],
+  );
 
   const chromeTabs = useMemo(() => {
     return nonHomeTabs.map((tab) => ({
@@ -118,6 +123,27 @@ export function TabBar({
     }));
   }, [nonHomeTabs, activeTabId, liveChatTabIds]);
 
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) {
+      return;
+    }
+    const applyPreviewState = () => {
+      const tabEls = wrapper.querySelectorAll<HTMLElement>(".chrome-tab[data-tab-id]");
+      tabEls.forEach((tabEl) => {
+        const tabId = tabEl.getAttribute("data-tab-id");
+        if (tabId && previewTabIds.has(tabId)) {
+          tabEl.setAttribute("data-preview", "true");
+        } else {
+          tabEl.removeAttribute("data-preview");
+        }
+      });
+    };
+    applyPreviewState();
+    const rafId = window.requestAnimationFrame(applyPreviewState);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [chromeTabs, previewTabIds]);
+
   const handleActive = useCallback((id: string) => {
     if (Date.now() - rightClickTimeRef.current < 200) return;
     onActivate(id);
@@ -126,10 +152,22 @@ export function TabBar({
   const handleReorder = useCallback(
     (tabId: string, _fromIndex: number, toIndex: number) => {
       const fromIndex = tabs.findIndex((t) => t.id === tabId);
-      if (fromIndex >= 0 && fromIndex !== toIndex) onReorder(fromIndex, toIndex);
+      if (fromIndex >= 0 && fromIndex !== toIndex) onReorder(tabId, fromIndex, toIndex);
     },
     [tabs, onReorder],
   );
+
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    const tabEl = (e.target as Element).closest?.(".chrome-tab");
+    if (!tabEl || !onMakePermanent) {
+      return;
+    }
+    const tabId = tabEl.getAttribute("data-tab-id");
+    if (!tabId || !previewTabIds.has(tabId)) {
+      return;
+    }
+    onMakePermanent(tabId);
+  }, [onMakePermanent, previewTabIds]);
 
   const handleWrapperContextMenu = useCallback((e: React.MouseEvent) => {
     const tabEl = (e.target as Element).closest?.(".chrome-tab");
@@ -156,7 +194,12 @@ export function TabBar({
       }
     }}>
       <ContextMenuTrigger asChild>
-        <div ref={wrapperRef} className="dench-chrome-tabs-wrapper flex items-center shrink-0 relative" onContextMenu={handleWrapperContextMenu}>
+        <div
+          ref={wrapperRef}
+          className="dench-chrome-tabs-wrapper flex items-center shrink-0 relative"
+          onContextMenu={handleWrapperContextMenu}
+          onDoubleClick={handleDoubleClick}
+        >
           {leftContent && (
             <div className="flex items-center px-1.5 shrink-0 z-10">
               {leftContent}
