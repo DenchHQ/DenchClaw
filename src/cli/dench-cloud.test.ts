@@ -158,7 +158,6 @@ describe("dench-cloud helpers", () => {
     });
     expect(patch.tools.alsoAllow).toEqual([
       "composio_search_tools",
-      "composio_resolve_tool",
       "composio_call_tool",
     ]);
   });

@@ -129,7 +129,6 @@ export function buildDenchGatewayCatalogUrl(gatewayUrl: string | undefined): str
 export const RECOMMENDED_DENCH_CLOUD_MODEL_ID = "claude-opus-4.6";
 export const DENCH_COMPOSIO_WRAPPER_TOOLS = [
   "composio_search_tools",
-  "composio_resolve_tool",
   "composio_call_tool",
 ] as const;
 

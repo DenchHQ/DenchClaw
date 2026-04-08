@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
-import {
-  createComposioSearchContextSecret,
-  verifyComposioSearchContext,
-} from "../shared/composio-search-context.ts";
 import { buildIdentityPrompt, resolveWorkspaceDir } from "./index.ts";
 import register from "./index.ts";
 import path from "node:path";
@@ -22,12 +18,34 @@ async function executeTool(tool: { execute: (toolCallId: string, input: Record<s
 function mockGatewaySearch(responsePayload: Record<string, unknown>) {
   process.env.DENCH_API_KEY = "dench-test-key";
   process.env.DENCH_GATEWAY_URL = "https://gateway.example.com";
+  const toolSchemas = responsePayload.tool_schemas as Record<string, Record<string, unknown>> | undefined;
+  const normalizedPayload = toolSchemas
+    ? {
+        ...responsePayload,
+        tool_schemas: Object.fromEntries(
+          Object.entries(toolSchemas).map(([toolSlug, schema]) => [
+            toolSlug,
+            {
+              ...schema,
+              execution_ref:
+                typeof schema.execution_ref === "string"
+                  ? schema.execution_ref
+                  : `exec_${toolSlug.toLowerCase()}`,
+              execution_ref_version:
+                typeof schema.execution_ref_version === "number"
+                  ? schema.execution_ref_version
+                  : 1,
+            },
+          ]),
+        ),
+      }
+    : responsePayload;
   globalThis.fetch = vi.fn(async (input, init) => {
     const url = typeof input === "string" ? input : input.url;
     expect(url).toBe("https://gateway.example.com/v1/composio/tool-router/search");
     expect(init?.method).toBe("POST");
     return new Response(
-      JSON.stringify(responsePayload),
+      JSON.stringify(normalizedPayload),
       {
         status: 200,
         headers: {
@@ -73,7 +91,6 @@ describe("buildIdentityPrompt", () => {
     expect(prompt).not.toContain("Composio MCP");
     expect(prompt).toContain("Never");
     expect(prompt).toContain("composio_search_tools");
-    expect(prompt).toContain("composio_resolve_tool");
     expect(prompt).toContain("composio_call_tool");
   });
 
@@ -84,7 +101,7 @@ describe("buildIdentityPrompt", () => {
     expect(prompt).toContain("action_link_markdown");
     expect(prompt).toContain("MUST end the assistant reply with that exact markdown link");
     expect(prompt).toContain("dench://composio/connect");
-    expect(prompt).toContain("dench://composio/reconnect");
+    expect(prompt).toContain("Only suggest a reconnect link");
     expect(prompt).toContain("connect_required");
   });
 
@@ -299,7 +316,7 @@ describe("register", () => {
     expect(result).toBeUndefined();
   });
 
-  it("registers the Composio search and resolver tools when the managed skill exists", () => {
+  it("registers the Composio search tool when the managed skill exists", () => {
     const tmp = path.join(
       os.tmpdir(),
       `dench-identity-register-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -322,14 +339,11 @@ describe("register", () => {
     expect(api.registerTool).toHaveBeenCalledWith(
       expect.objectContaining({ name: "composio_search_tools" }),
     );
-    expect(api.registerTool).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "composio_resolve_tool" }),
-    );
 
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("resolves recent GitHub PR requests through recipe-backed tools outside the direct tool slice", async () => {
+  it("returns a recommended GitHub PR tool through ranked search", async () => {
     const tmp = path.join(
       os.tmpdir(),
       `dench-identity-resolver-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -384,16 +398,16 @@ describe("register", () => {
 
     register(api as any);
 
-    const resolver = getRegisteredTool(api as any, "composio_resolve_tool");
-    const result = await executeTool(resolver, {
+    const searchTool = getRegisteredTool(api as any, "composio_search_tools");
+    const result = await executeTool(searchTool, {
       app: "github",
-      intent: "check my recent PRs",
+      query: "check my recent PRs",
     });
     const payload = JSON.parse(result.content[0].text);
 
-    expect(payload.tool).toBe("GITHUB_FIND_PULL_REQUESTS");
-    expect(payload.directly_callable).toBe(true);
-    expect(payload.dispatcher_tool).toBe("composio_call_tool");
+    expect(payload.recommended_result.tool).toBe("GITHUB_FIND_PULL_REQUESTS");
+    expect(payload.recommended_result.dispatcher_tool).toBe("composio_call_tool");
+    expect(payload.recommended_result.dispatcher_input.execution_ref).toEqual(expect.any(String));
 
     rmSync(tmp, { recursive: true, force: true });
   });
@@ -478,7 +492,7 @@ describe("register", () => {
       path.join(tmp, "composio-tool-index.json"),
       JSON.stringify({
         generated_at: "2026-04-03T00:00:00.000Z",
-        managed_tools: ["composio_search_tools", "composio_resolve_tool", "composio_call_tool"],
+        managed_tools: ["composio_search_tools", "composio_call_tool"],
         connected_apps: [
           {
             toolkit_slug: "stripe",
@@ -555,6 +569,8 @@ describe("register", () => {
               tool_slug: "STRIPE_LIST_SUBSCRIPTIONS",
               description: "List subscriptions.",
               hasFullSchema: true,
+              execution_ref: "exec_stripe_trs_123",
+              execution_ref_version: 1,
               input_schema: {
                 type: "object",
                 properties: {
@@ -610,8 +626,9 @@ describe("register", () => {
     expect(payload.search_source).toBe("gateway_tool_router");
     expect(payload.search_session_id).toBe("trs_123");
     expect(payload.tool_schemas.STRIPE_LIST_SUBSCRIPTIONS.input_schema.properties.starting_after).toBeTruthy();
-    expect(payload.recommended_result.dispatcher_input.search_session_id).toBe("trs_123");
-    expect(payload.recommended_result.dispatcher_input.search_context_token).toEqual(expect.any(String));
+    expect(payload.recommended_result.dispatcher_input.execution_ref).toBe("exec_stripe_trs_123");
+    expect(payload.recommended_result.account_selection_required).toBe(false);
+    expect(payload.recommended_result.selected_account.account).toBe("acct_primary");
     expect(payload.recommended_result.recommended_plan_steps).toContain("Continue while has_more is true.");
     expect(payload.recommended_result.pagination_input_hints).toContain("starting_after");
 
@@ -687,21 +704,21 @@ describe("register", () => {
 
     register(api as any);
 
-    const resolver = getRegisteredTool(api as any, "composio_resolve_tool");
-    const result = await executeTool(resolver, {
+    const searchTool = getRegisteredTool(api as any, "composio_search_tools");
+    const result = await executeTool(searchTool, {
       app: "stripe",
-      intent: "list subscriptions",
+      query: "list subscriptions",
     });
     const payload = JSON.parse(result.content[0].text);
 
-    expect(payload.account_selection_required).toBe(true);
-    expect(payload.account_candidates).toHaveLength(2);
+    expect(payload.recommended_result.account_selection_required).toBe(true);
+    expect(payload.recommended_result.account_candidates).toHaveLength(2);
     expect(payload.instruction).toContain("which connected Stripe account");
 
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("forwards the selected account to gateway search and binds it into the signed dispatcher context", async () => {
+  it("forwards the selected account to gateway search while keeping dispatcher input opaque", async () => {
     const tmp = path.join(
       os.tmpdir(),
       `dench-identity-selected-account-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -764,6 +781,8 @@ describe("register", () => {
               tool_slug: "STRIPE_LIST_SUBSCRIPTIONS",
               description: "List subscriptions.",
               hasFullSchema: true,
+              execution_ref: "exec_stripe_selected",
+              execution_ref_version: 1,
               input_schema: { type: "object", properties: {} },
             },
           },
@@ -797,19 +816,10 @@ describe("register", () => {
     });
     const payload = JSON.parse(result.content[0].text);
     const dispatcherInput = payload.recommended_result.dispatcher_input;
-    const verifiedContext = verifyComposioSearchContext(
-      dispatcherInput.search_context_token,
-      createComposioSearchContextSecret({
-        workspaceDir: tmp,
-        gatewayUrl: "https://gateway.example.com",
-        apiKey: "dench-test-key",
-      }),
-    );
 
     expect(payload.recommended_result.account_selection_required).toBe(false);
     expect(payload.recommended_result.selected_account.account).toBe("acct_prod");
-    expect(dispatcherInput.account).toBe("acct_prod");
-    expect(verifiedContext?.account).toBe("acct_prod");
+    expect(dispatcherInput.execution_ref).toBe("exec_stripe_selected");
 
     rmSync(tmp, { recursive: true, force: true });
   });
@@ -923,10 +933,10 @@ describe("register", () => {
 
     register(api as any);
 
-    const resolver = getRegisteredTool(api as any, "composio_resolve_tool");
-    const result = await executeTool(resolver, {
+    const searchTool = getRegisteredTool(api as any, "composio_search_tools");
+    const result = await executeTool(searchTool, {
       app: "slack",
-      intent: "check my slack",
+      query: "check my slack",
     });
     const payload = JSON.parse(result.content[0].text);
 

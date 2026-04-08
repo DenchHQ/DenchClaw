@@ -5,7 +5,7 @@ description: Connected app tool recipes for Dench Integrations (Gmail, Slack, Gi
 
 # Dench Integrations connected apps
 
-Use the **Dench Integrations tools** only. In DenchClaw, always search first with `composio_search_tools`, inspect the returned full schemas plus plan/pitfall guidance, then execute the chosen tool via `composio_call_tool`. `composio_resolve_tool` still exists as a compatibility wrapper when you want a single best-match result, but ranked search is the default path. Some sessions may still expose direct tool names like `GMAIL_FETCH_EMAILS`, but do not rely on that as the default path.
+Use the **Dench Integrations tools** only. In DenchClaw, always search first with `composio_search_tools`, inspect the returned full schemas plus plan/pitfall guidance, then execute the chosen tool via `composio_call_tool`. Ranked search is the only supported discovery path. Some sessions may still expose direct tool names like `GMAIL_FETCH_EMAILS`, but do not rely on that as the default path.
 
 Do **not** use:
 - `gog`
@@ -16,19 +16,18 @@ Do **not** use:
 
 If the user mentions Dench Integrations, the connected-app layer, rube, map, MCP, or says an app is already connected, this is the only allowed integration path. If the integration wrapper tools are unavailable in the current session, stop and report repair guidance instead of bypassing them.
 
-Do not rely on workspace cache files like `composio-tool-index.json`, `composio-tool-catalog.json`, or `composio-mcp-status.json` as runtime truth. `composio_search_tools` is the source of truth because it returns official integration search results, full `input_schema`, connection/account status, `recommended_plan_steps`, `known_pitfalls`, and a reusable `search_session_id` when available.
+Do not rely on workspace cache files like `composio-tool-index.json`, `composio-tool-catalog.json`, or `composio-mcp-status.json` as runtime truth. `composio_search_tools` is the source of truth because it returns official integration search results, full `input_schema`, connection/account status, `recommended_plan_steps`, `known_pitfalls`, and a gateway-issued `execution_ref` inside `dispatcher_input`.
 
 ## General rules
 
 - Tool names are **uppercase** with underscores (e.g. `GMAIL_FETCH_EMAILS`).
-- Execute searched or resolved tools through `composio_call_tool` with the returned `app`, `tool_name`, `search_context_token`, optional `search_session_id`, optional selected `account`, and the final `arguments` object.
-- Do not invent or alter `dispatcher_input`; copy it from `composio_search_tools` or `composio_resolve_tool` and only add the final `arguments`.
+- Execute searched tools through `composio_call_tool` with the returned `execution_ref` and the final `arguments` object.
+- Do not invent or alter `dispatcher_input`; copy it from `composio_search_tools` unchanged and only add the final `arguments`.
 - Pass **JSON-shaped** arguments as the tool schema requires: arrays are arrays, not comma-separated strings.
 - Read the returned `input_schema` before filling arguments. Use exact field names and types from that schema.
 - Treat the live schema as authoritative over any recipe table below. Pay attention to `required`, property `type`, nested objects/arrays, enums, defaults, and pagination fields.
 - If a call fails on argument shape, fix the types and retry once before escalating.
-- If `composio_search_tools` or `composio_resolve_tool` says account selection is required, ask the user which connected account to use before calling `composio_call_tool`.
-- Do not pass `account` unless the search flow actually returned or required it for the chosen live result.
+- If `composio_search_tools` says account selection is required, ask the user which connected account to use before calling `composio_call_tool`.
 - If the returned search result includes pagination fields such as `starting_after`, `next_cursor`, `page`, or `page_token`, keep paginating until complete when the user asked for the full dataset.
 - Never fall back to `gog`, curl, or raw gateway HTTP for a connected app task unless the user explicitly asks for that non-integration path.
 
@@ -103,4 +102,4 @@ Do not rely on workspace cache files like `composio-tool-index.json`, `composio-
 
 ## Subagent handoff
 
-When delegating, include: which app, the exact tool name, and the argument object you intend (copy shapes from the live tool schema, `composio_search_tools`, or `composio_resolve_tool`).
+When delegating, include: which app, the exact tool name, the `execution_ref`, and the argument object you intend (copy shapes from the live tool schema or `composio_search_tools`).

@@ -22,7 +22,6 @@ export type ComposioMcpServerConfig = {
 
 const DENCH_COMPOSIO_WRAPPER_TOOLS = [
   "composio_search_tools",
-  "composio_resolve_tool",
   "composio_call_tool",
 ] as const;
 

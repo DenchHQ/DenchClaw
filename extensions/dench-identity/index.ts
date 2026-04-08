@@ -284,6 +284,35 @@ function asRecord(value: unknown): UnknownRecord | undefined {
     : undefined;
 }
 
+function postDebugLog(
+  hypothesisId: string,
+  location: string,
+  message: string,
+  data: Record<string, unknown>,
+): void {
+  if (process.env.NODE_ENV === "test") {
+    return;
+  }
+  // #region agent log
+  fetch("http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "822d38",
+    },
+    body: JSON.stringify({
+      sessionId: "822d38",
+      runId: "dench-identity",
+      hypothesisId,
+      location,
+      message,
+      data,
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+}
+
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
@@ -1319,6 +1348,10 @@ function chooseSearchAccountCandidate(
     }
   }
 
+  if (candidates.length === 1) {
+    return candidates[0] ?? null;
+  }
+
   return null;
 }
 
@@ -1336,33 +1369,11 @@ function loadLocalResolverCandidate(
 }
 
 function buildDispatcherInput(params: {
-  appSlug: string;
-  toolName: string;
-  secret: string;
-  mode: "gateway_tool_router";
-  sessionId?: string;
-  selectedAccount?: ComposioSearchPresentationResult["selected_account"];
-  accountSelectionRequired?: boolean;
+  executionRef?: string;
 }) {
-  const token = signComposioSearchContext({
-    version: 1,
-    mode: params.mode,
-    app: params.appSlug,
-    tool_name: params.toolName,
-    ...(params.sessionId ? { session_id: params.sessionId } : {}),
-    ...(params.selectedAccount?.account ? { account: params.selectedAccount.account } : {}),
-    ...(params.accountSelectionRequired ? { account_required: true } : {}),
-    issued_at: new Date().toISOString(),
-  }, params.secret);
-
-  const dispatcherInput = {
-    app: params.appSlug,
-    tool_name: params.toolName,
-    search_context_token: token,
-    ...(params.sessionId ? { search_session_id: params.sessionId } : {}),
-    ...(params.selectedAccount?.account ? { account: params.selectedAccount.account } : {}),
-  };
-  return dispatcherInput;
+  return params.executionRef
+    ? { execution_ref: params.executionRef }
+    : {};
 }
 
 function findGatewayToolkitStatus(
@@ -1501,6 +1512,10 @@ function buildGatewayPresentationResults(params: {
       toolkitName,
       schema,
     });
+    const executionRef = readString(schema.execution_ref);
+    if (!executionRef) {
+      return [];
+    }
     const accountCandidates = buildGatewayAccountCandidates({
       status,
       localApp: undefined,
@@ -1534,13 +1549,7 @@ function buildGatewayPresentationResults(params: {
       selected_account: selectedAccount,
       account_selection_required: accountSelectionRequired,
       dispatcher_input: buildDispatcherInput({
-        appSlug: toolkitSlug,
-        toolName,
-        secret: params.searchSecret,
-        mode: "gateway_tool_router",
-        sessionId: sessionId ?? undefined,
-        selectedAccount,
-        accountSelectionRequired,
+        executionRef,
       }),
       execution_guidance: readString(queryResult.execution_guidance) ?? null,
       recommended_plan_steps: readStringArray(queryResult.recommended_plan_steps),
@@ -1580,8 +1589,9 @@ async function runGatewayComposioToolSearch(params: {
   sessionId?: string;
   searchSecret: string;
 }): Promise<ComposioSearchRun | null> {
+  const normalizedRequestedApp = normalizeResolverApp(params.requestedApp);
   const knownFields = [
-    params.requestedApp ? `toolkit:${normalizeResolverApp(params.requestedApp)}` : null,
+    normalizedRequestedApp ? `toolkit:${normalizedRequestedApp}` : null,
   ].filter((value): value is string => Boolean(value));
 
   const payload = await postComposioGatewayJson({
@@ -1608,9 +1618,10 @@ async function runGatewayComposioToolSearch(params: {
   const gatewayError = readString(payload.error)
     ?? readString(asRecord(payload.error)?.message);
   const searchStatuses = asRecordArray(payload.toolkit_connection_statuses);
-  const shouldProbeLiveConnections = searchStatuses.some((status) =>
-    readBoolean(status.has_active_connection) === false
-  );
+  const shouldProbeLiveConnections = Boolean(normalizedRequestedApp)
+    || searchStatuses.some((status) =>
+      readBoolean(status.has_active_connection) === false
+    );
   const liveStatuses = shouldProbeLiveConnections
     ? await fetchGatewayLiveToolkitStatuses({ api: params.api })
     : null;
@@ -1679,12 +1690,7 @@ function buildSearchPresentationResults(params: {
       selected_account: selectedAccount,
       account_selection_required: accountSelectionRequired,
       dispatcher_input: buildDispatcherInput({
-        appSlug: app.toolkit_slug,
-        toolName: result.tool.name,
-        secret: params.searchSecret,
-        mode: "gateway_tool_router",
-        selectedAccount,
-        accountSelectionRequired,
+        executionRef: undefined,
       }),
       execution_guidance: null,
       recommended_plan_steps: [],
@@ -1803,6 +1809,19 @@ function createComposioSearchTool(api: OpenClawPluginApi): AnyAgentTool {
       const topK = Number.isFinite(rawTopK) ? Math.max(1, Math.min(Math.trunc(rawTopK), 10)) : 5;
       const normalizedRequestedApp = normalizeResolverApp(requestedApp);
       const searchSecret = resolveComposioSearchSecret(api, workspaceDir);
+      postDebugLog(
+        "H7",
+        "extensions/dench-identity/index.ts:1778",
+        "composio search tool invoked",
+        {
+          workspaceDirPresent: workspaceDir.trim().length > 0,
+          query,
+          requestedApp: normalizedRequestedApp ?? null,
+          requestedAccountPresent: Boolean(requestedAccount?.trim()),
+          sessionIdPresent: Boolean(sessionId?.trim()),
+          topK,
+        },
+      );
 
       const gatewaySearch = await runGatewayComposioToolSearch({
         api,
@@ -1825,6 +1844,24 @@ function createComposioSearchTool(api: OpenClawPluginApi): AnyAgentTool {
       const requestedStatus = normalizedRequestedApp
         ? findGatewayToolkitStatus(gatewaySearch.toolkit_connection_statuses ?? [], normalizedRequestedApp)
         : null;
+      postDebugLog(
+        "H7",
+        "extensions/dench-identity/index.ts:1796",
+        "composio search tool completed",
+        {
+          query,
+          requestedApp: normalizedRequestedApp ?? null,
+          searchAvailable: true,
+          resultCount: gatewaySearch.results.length,
+          topConfidence: gatewaySearch.top_confidence,
+          searchSource: gatewaySearch.search_source,
+          searchSessionId: gatewaySearch.search_session_id ?? null,
+          hasGatewayError: Boolean(gatewaySearch.error),
+          requestedStatusHasActiveConnection:
+            requestedStatus ? readBoolean(requestedStatus.has_active_connection) : null,
+          nextStepsCount: gatewaySearch.next_steps_guidance.length,
+        },
+      );
 
       if (gatewaySearch.results.length > 0) {
         const results = gatewaySearch.results.map((result) => buildSearchResultPayload(result));
@@ -1963,19 +2000,14 @@ function createComposioResolveTool(api: OpenClawPluginApi): AnyAgentTool {
           }
         }
 
-        const reconnectTarget = normalizedRequestedApp ?? undefined;
-        const reconnectLink = reconnectTarget ? buildComposioActionLink("reconnect", reconnectTarget) : null;
         return jsonResult({
           error: normalizedRequestedApp
             ? `No ${DENCH_INTEGRATION_DISPLAY_NAME.toLowerCase()} tools matched this ${normalizedRequestedApp} request.`
             : `No ${DENCH_INTEGRATION_DISPLAY_NAME.toLowerCase()} tools matched this request.`,
-          availability: reconnectTarget ? "reconnect_recommended" : "unknown",
-          instruction: reconnectLink
-            ? `The live ${DENCH_INTEGRATIONS_DISPLAY_NAME} search did not return an executable ${humanizeResolverApp(reconnectTarget)} tool. Explain that briefly and end the assistant reply with this exact markdown link: ${reconnectLink}`
-            : `Ask a brief clarifying question or call \`${COMPOSIO_SEARCH_TOOLS_NAME}\` again with a narrower query.`,
+          availability: "unknown",
+          instruction: `Ask a brief clarifying question or call \`${COMPOSIO_SEARCH_TOOLS_NAME}\` again with a narrower query.`,
           ...(gatewaySearch.error ? { gateway_error: gatewaySearch.error } : {}),
           ...(gatewaySearch.search_session_id ? { search_session_id: gatewaySearch.search_session_id } : {}),
-          ...(reconnectTarget ? buildResolverActionDetails("reconnect", reconnectTarget) : {}),
         });
       }
 
@@ -2004,7 +2036,7 @@ function createComposioResolveTool(api: OpenClawPluginApi): AnyAgentTool {
           account_selection_required: true,
           account_candidates: top.account_candidates,
           availability: "account_selection_required",
-          instruction: `Ask the user which connected ${top.app.toolkit_name} account to use before calling \`${COMPOSIO_CALL_TOOL_NAME}\`. Once they choose, call \`${COMPOSIO_RESOLVE_TOOL_NAME}\` again with the \`account\` field set to that label or identity.`,
+          instruction: `Ask the user which connected ${top.app.toolkit_name} account to use before calling \`${COMPOSIO_CALL_TOOL_NAME}\`. Once they choose, call \`${COMPOSIO_SEARCH_TOOLS_NAME}\` again with the \`account\` field set to that label or identity and use the returned \`dispatcher_input\`.`,
         });
       }
 
@@ -2032,18 +2064,17 @@ function buildComposioDefaultGuidance(composioAppsSkillPath: string): string {
     "",
     `- If the user mentions ${DENCH_INTEGRATIONS_DISPLAY_NAME}, a connected app, rube, map, MCP, or says an app is already connected, use the integration tools first.`,
     `- **When the user asks about ANY third-party app or service** (e.g. Slack, HubSpot, Salesforce, Jira, Asana, Discord, Airtable, Notion, Linear, Gmail, GitHub, Google Calendar, Stripe, Zendesk, Trello, etc.), call \`${COMPOSIO_SEARCH_TOOLS_NAME}\` first to verify whether it is connected, inspect the official ranked tools, and read the full returned schemas before answering. This applies to ALL apps, not just the ones listed here.`,
-    "- Trust the official integration search payload exposed through the gateway. Use the returned `input_schema`, `recommended_plan_steps`, `known_pitfalls`, `toolkit_connection_statuses`, and `search_session_id` as the source of truth.",
-    `- After searching, execute the chosen tool with \`${COMPOSIO_CALL_TOOL_NAME}\` using the returned \`dispatcher_input\` (especially \`search_context_token\` and any \`search_session_id\`). Do not assume connected-app tools are registered as direct top-level tools in the session.`,
+    "- Trust the official integration search payload exposed through the gateway. Use the returned `input_schema`, `recommended_plan_steps`, `known_pitfalls`, `toolkit_connection_statuses`, and `dispatcher_input.execution_ref` as the source of truth.",
+    `- After searching, execute the chosen tool with \`${COMPOSIO_CALL_TOOL_NAME}\` using the returned \`dispatcher_input\` unchanged. Do not assume connected-app tools are registered as direct top-level tools in the session.`,
     `- If search returns \`account_selection_required\`, ask the user which connected account to use before calling \`${COMPOSIO_CALL_TOOL_NAME}\`.`,
-    `- Use \`${COMPOSIO_RESOLVE_TOOL_NAME}\` only when you specifically want a single best-match compatibility wrapper instead of the full ranked search results.`,
     "- Review `recommended_plan_steps`, `known_pitfalls`, enums, defaults, required fields, and any pagination hints from `composio_search_tools` before executing the tool.",
     `- Load and follow \`${composioAppsSkillPath}\` for high-level workflow hints, but let the live integration schema decide the actual argument names and types.`,
     "- Do not rely on `composio-tool-index.json`, `composio-tool-catalog.json`, or `composio-mcp-status.json` as runtime inputs. They are not the source of truth.",
     `- Never use \`gog\`, shell CLIs, curl, or raw gateway HTTP for Gmail/Calendar/Drive/Slack/GitHub/Notion/Linear when ${DENCH_INTEGRATIONS_DISPLAY_NAME} is connected or the user mentions the connected-app layer/rube/map/MCP.`,
-    "- **When the integration search or resolve response returns `action_link_markdown`, you MUST end the assistant reply with that exact markdown link.** Do not omit it. Do not rephrase it as plain text. The link renders as a clickable button in chat.",
+    "- **When the integration search response returns `action_link_markdown`, you MUST end the assistant reply with that exact markdown link.** Do not omit it. Do not rephrase it as plain text. The link renders as a clickable button in chat.",
     "- Missing first-time connection example: `[Connect Slack](dench://composio/connect?toolkit=slack&name=Slack)`.",
-    "- Stale or unusable connection example: `[Reconnect Slack](dench://composio/reconnect?toolkit=slack&name=Slack)`.",
-    "- If the resolver returns an error with `availability: \"connect_required\"`, briefly explain the app is not connected and end with the connect link. Do NOT suggest navigating to Integrations manually.",
+    "- Only suggest a reconnect link when the live integration response explicitly indicates the connection is stale or unusable. Do not infer reconnect just because search returned no executable tools.",
+    "- If the search response returns `availability: \"connect_required\"`, briefly explain the app is not connected and end with the connect link. Do NOT suggest navigating to Integrations manually.",
     "- If the integration search succeeds, do not stop because of a separate health warning or stale workspace cache. The live gateway-backed search result is the authority.",
     "- If an integration tool call fails because of argument shape, fix the arguments and retry once before considering any fallback.",
     "- When the user implicitly asks for the full dataset, keep paginating until the tool response no longer advertises more pages.",
@@ -2161,7 +2192,6 @@ For multi-session projects, write a session handoff summary to \`${workspaceDir}
 - For connected apps (Gmail, Slack, GitHub, etc.), use the **${DENCH_INTEGRATIONS_DISPLAY_NAME}** tools directly. Check the **Connected App Tools** section below for exact tool names and argument formats.
 - **When the user mentions ANY third-party app or service**, always call \`${COMPOSIO_SEARCH_TOOLS_NAME}\` before answering to verify availability, inspect the ranked tool matches, and read the returned full schemas — this applies to all apps (HubSpot, Salesforce, Slack, Gmail, etc.), not just a fixed list. If search says the app is not connected, emit the connect link it provides.
 - If the exact integration tool name is unclear, call \`${COMPOSIO_SEARCH_TOOLS_NAME}\` before guessing or browsing the curated integration tools for this workspace, then use the returned \`dispatcher_input\` unchanged except for the final \`arguments\`.
-- Use \`${COMPOSIO_RESOLVE_TOOL_NAME}\` only when a single best-match compatibility result is explicitly more convenient than the ranked search output.
 - **Never** use curl or raw HTTP to call gateway integration endpoints — always use the integration wrapper tools.
 - **Never** use \`gog\` for Gmail/Calendar/Drive when ${DENCH_INTEGRATIONS_DISPLAY_NAME} is connected or the user mentions the connected-app layer/rube/map/MCP. \`gog\` is a fallback only when the user explicitly asks for it or the integration layer is unavailable.
 
@@ -2185,13 +2215,37 @@ function shouldRegisterComposioResolver(workspaceDir: string): boolean {
 export default function register(api: any) {
   const config = api?.config?.plugins?.entries?.["dench-identity"]?.config;
   if (config?.enabled === false) {
+    postDebugLog(
+      "H5",
+      "extensions/dench-identity/index.ts:2156",
+      "dench identity plugin disabled",
+      { enabled: false },
+    );
     return;
   }
 
   const workspaceDir = resolveWorkspaceDir(api);
-  if (workspaceDir && typeof api.registerTool === "function" && shouldRegisterComposioResolver(workspaceDir)) {
+  const shouldRegisterComposio = workspaceDir
+    ? shouldRegisterComposioResolver(workspaceDir)
+    : false;
+  const canRegisterComposio =
+    Boolean(workspaceDir)
+    && typeof api.registerTool === "function"
+    && shouldRegisterComposio;
+  postDebugLog(
+    "H5",
+    "extensions/dench-identity/index.ts:2160",
+    "dench identity registration state",
+    {
+      workspaceDirPresent: Boolean(workspaceDir),
+      registerToolAvailable: typeof api.registerTool === "function",
+      shouldRegisterComposio,
+      searchToolWillRegister: canRegisterComposio,
+      resolveToolRegistered: false,
+    },
+  );
+  if (canRegisterComposio) {
     api.registerTool(createComposioSearchTool(api));
-    api.registerTool(createComposioResolveTool(api));
   }
 
   api.on(
@@ -2201,8 +2255,22 @@ export default function register(api: any) {
       if (!workspaceDir) {
         return;
       }
+      const prompt = buildIdentityPrompt(workspaceDir);
+      postDebugLog(
+        "H6",
+        "extensions/dench-identity/index.ts:2172",
+        "identity prompt built",
+        {
+          workspaceDirPresent: true,
+          promptChars: prompt.length,
+          includesSearchTool: prompt.includes(COMPOSIO_SEARCH_TOOLS_NAME),
+          includesCallTool: prompt.includes(COMPOSIO_CALL_TOOL_NAME),
+          includesResolveTool: prompt.includes(COMPOSIO_RESOLVE_TOOL_NAME),
+          includesIntegrationsHeading: prompt.includes("Connected App Tools"),
+        },
+      );
       return {
-        prependSystemContext: buildIdentityPrompt(workspaceDir),
+        prependSystemContext: prompt,
       };
     },
     { priority: 100 },
