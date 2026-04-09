@@ -332,6 +332,14 @@ describe("agent-runner", () => {
 
 		it("keeps stream open across lifecycle error and accepts continuation runId", async () => {
 			const MockWs = installMockWsModule();
+			MockWs.responseOverrides["chat.send"] = (frame) => ({
+				type: "res",
+				id: frame.id,
+				ok: true,
+				payload: {
+					runId: "r-initial",
+				},
+			});
 			const { spawnAgentProcess } = await import("./agent-runner.js");
 
 			const proc = spawnAgentProcess("hello", "sess-lifeerr");
@@ -590,7 +598,7 @@ describe("agent-runner", () => {
 			await waitFor(() => closed, { attempts: 80, delayMs: 10 });
 		});
 
-		it("suppresses chat events once agent events arrive in start mode", async () => {
+		it("forwards final chat text after agent events in start mode", async () => {
 			const MockWs = installMockWsModule();
 			const { spawnAgentProcess } = await import("./agent-runner.js");
 
@@ -627,15 +635,18 @@ describe("agent-runner", () => {
 					state: "final",
 					message: {
 						role: "assistant",
-						content: "should be ignored",
+						content: "should be forwarded",
 					},
 					sessionKey: "agent:main:web:sess-nochat",
 					globalSeq: 2,
 				},
 			});
 
-			await new Promise((resolve) => setTimeout(resolve, 40));
-			expect(stdout).not.toContain("should be ignored");
+			await waitFor(() => stdout.includes("should be forwarded"), {
+				attempts: 80,
+				delayMs: 10,
+			});
+			expect(stdout).toContain("should be forwarded");
 			proc.kill("SIGTERM");
 		});
 

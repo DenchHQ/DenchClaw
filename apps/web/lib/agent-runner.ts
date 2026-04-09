@@ -790,6 +790,14 @@ class GatewayProcessHandle
 	private sessionStarted = false;
 	private filterDropLogCount = 0;
 	private readonly startIdempotencyKey = randomUUID();
+	private debugAgentLifecycleCount = 0;
+	private debugAgentAssistantCount = 0;
+	private debugAgentToolCount = 0;
+	private debugChatFinalCount = 0;
+	private debugSuppressedChatFinalCount = 0;
+	private debugLastAgentStream: string | null = null;
+	private debugLastAgentPhase: string | null = null;
+	private debugCloseReason: string | null = null;
 
 	constructor(private readonly params: SpawnGatewayProcessParams) {
 		super();
@@ -1194,6 +1202,58 @@ class GatewayProcessHandle
 			recoveryActive: Date.now() <= this.lifecycleErrorRecoveryUntil,
 			...context,
 		});
+		// #region agent log
+		if (process.env.NODE_ENV !== "test") {
+			fetch("http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"X-Debug-Session-Id": "822d38",
+				},
+				body: JSON.stringify({
+					sessionId: "822d38",
+					runId: this.runId ?? this.params.sessionKey ?? "pending",
+					hypothesisId: "H3",
+					location: "apps/web/lib/agent-runner.ts:1183",
+					message: "gateway event filtered",
+					data: {
+						reason,
+						event: frame.event,
+						stream: stream ?? null,
+						globalSeq: globalSeq ?? null,
+						replayFloorSeq: this.replayFloorSeq,
+						recoveryActive: Date.now() <= this.lifecycleErrorRecoveryUntil,
+						filterDropLogCount: this.filterDropLogCount,
+					},
+					timestamp: Date.now(),
+				}),
+			}).catch(() => {});
+		}
+		// #endregion
+	}
+
+	private shouldAdoptIncomingRunId(params: {
+		incomingRunId: string;
+		eventGlobalSeq?: number;
+		stream?: string;
+		phase?: string;
+	}): boolean {
+		if (!this.runId || params.incomingRunId === this.runId) {
+			return true;
+		}
+		if (Date.now() <= this.lifecycleErrorRecoveryUntil) {
+			return true;
+		}
+		const hasAdvancedGlobalSeq =
+			typeof params.eventGlobalSeq === "number" &&
+			params.eventGlobalSeq > this.lastGlobalSeq;
+		if (!hasAdvancedGlobalSeq || !this.sessionStarted || this.closeScheduled) {
+			return false;
+		}
+		if (params.stream === "lifecycle") {
+			return params.phase !== "start";
+		}
+		return params.stream === "item";
 	}
 
 	private handleGatewayEvent(frame: GatewayEventFrame): void {
@@ -1217,12 +1277,29 @@ class GatewayProcessHandle
 				return;
 			}
 			const runId = typeof payload.runId === "string" ? payload.runId : undefined;
+			const stream =
+				typeof payload.stream === "string" ? payload.stream : undefined;
+			const data = asRecord(payload.data);
+			const phase = data && typeof data.phase === "string" ? data.phase : undefined;
+			const payloadGlobalSeq =
+				typeof payload.globalSeq === "number" ? payload.globalSeq : undefined;
+			const eventGlobalSeq =
+				payloadGlobalSeq ??
+				(typeof frame.seq === "number" ? frame.seq : undefined);
+			const streamName = stream ?? "";
+			const phaseName = phase ?? "";
 			if (this.runId && runId && runId !== this.runId) {
-				if (Date.now() <= this.lifecycleErrorRecoveryUntil) {
-					// The gateway can recover from lifecycle/error by creating
-					// a continuation run with a new runId under the same session.
-					// During the recovery window, follow that new run so the UI
-					// doesn't miss trailing events before final termination.
+				if (
+					this.shouldAdoptIncomingRunId({
+						incomingRunId: runId,
+						eventGlobalSeq,
+						stream,
+						phase,
+					})
+				) {
+					// The gateway can recover by continuing the same session under
+					// a new runId. Follow the continuation run so the UI keeps
+					// receiving trailing lifecycle and final assistant events.
 					this.runId = runId;
 					this.clearLifecycleErrorCloseTimer();
 				} else {
@@ -1230,11 +1307,6 @@ class GatewayProcessHandle
 					return;
 				}
 			}
-			const payloadGlobalSeq =
-				typeof payload.globalSeq === "number" ? payload.globalSeq : undefined;
-			const eventGlobalSeq =
-				payloadGlobalSeq ??
-				(typeof frame.seq === "number" ? frame.seq : undefined);
 			if (
 				typeof eventGlobalSeq === "number" &&
 				eventGlobalSeq <= this.replayFloorSeq
@@ -1251,12 +1323,25 @@ class GatewayProcessHandle
 			) {
 				this.lastGlobalSeq = eventGlobalSeq;
 			}
+			if (streamName === "lifecycle") {
+				this.debugAgentLifecycleCount += 1;
+			} else if (streamName === "assistant") {
+				this.debugAgentAssistantCount += 1;
+			} else if (streamName === "tool") {
+				this.debugAgentToolCount += 1;
+			}
+			if (streamName) {
+				this.debugLastAgentStream = streamName;
+			}
+			if (phaseName) {
+				this.debugLastAgentPhase = phaseName;
+			}
 
 			const event: AgentEvent = {
 				event: "agent",
 				...(runId ? { runId } : {}),
-				...(typeof payload.stream === "string" ? { stream: payload.stream } : {}),
-				...(asRecord(payload.data) ? { data: payload.data as Record<string, unknown> } : {}),
+				...(stream ? { stream } : {}),
+				...(data ? { data } : {}),
 				...(typeof payload.seq === "number" ? { seq: payload.seq } : {}),
 				...(typeof eventGlobalSeq === "number"
 					? { globalSeq: eventGlobalSeq }
@@ -1267,34 +1352,31 @@ class GatewayProcessHandle
 
 			(this.stdout as PassThrough).write(`${JSON.stringify(event)}\n`);
 
-			const stream = typeof payload.stream === "string" ? payload.stream : "";
-			const data = asRecord(payload.data);
-			const phase = data && typeof data.phase === "string" ? data.phase : "";
 			if (
 				this.params.mode === "start" &&
 				this.params.sessionKey?.includes(":web:") &&
-				stream === "tool" &&
-				phase === "result" &&
+				streamName === "tool" &&
+				phaseName === "result" &&
 				typeof data?.name === "string" &&
 				data.name === "sessions_yield" &&
 				sessionKey === this.params.sessionKey
 			) {
-				this.scheduleClose();
+				this.scheduleClose("sessions_yield_tool_result");
 			}
-			if (!(stream === "lifecycle" && phase === "error")) {
+			if (!(streamName === "lifecycle" && phaseName === "error")) {
 				this.clearLifecycleErrorCloseTimer();
 			}
 			if (
 				this.params.mode === "start" &&
-				stream === "lifecycle" &&
-				phase === "end"
+				streamName === "lifecycle" &&
+				phaseName === "end"
 			) {
-				this.scheduleClose();
+				this.scheduleClose("agent_lifecycle_end");
 			}
 			if (
 				this.params.mode === "start" &&
-				stream === "lifecycle" &&
-				phase === "error"
+				streamName === "lifecycle" &&
+				phaseName === "error"
 			) {
 				this.armLifecycleErrorCloseTimer();
 			}
@@ -1305,27 +1387,105 @@ class GatewayProcessHandle
 			const payload = asRecord(frame.payload) ?? {};
 			const sessionKey =
 				typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+			const message = asRecord(payload.message);
+			const messageRole =
+				typeof message?.role === "string" ? message.role : undefined;
+			const rawMessageContent = message?.content;
+			const messageContentKind =
+				typeof rawMessageContent === "string"
+					? "string"
+					: Array.isArray(rawMessageContent)
+						? "array"
+						: rawMessageContent == null
+							? "missing"
+							: "other";
+			const messageTextLength =
+				typeof rawMessageContent === "string"
+					? rawMessageContent.length
+					: Array.isArray(rawMessageContent)
+						? rawMessageContent.reduce((total, part) => {
+							const rec = asRecord(part);
+							if (
+								(rec?.type === "text" || rec?.type === "output_text") &&
+								typeof rec.text === "string"
+							) {
+								return total + rec.text.length;
+							}
+							return total;
+						}, 0)
+						: 0;
+			const messageContentPartTypes =
+				Array.isArray(rawMessageContent)
+					? rawMessageContent.slice(0, 8).map((part) => {
+						const rec = asRecord(part);
+						return typeof rec?.type === "string" ? rec.type : "unknown";
+					})
+					: [];
+			const payloadGlobalSeq =
+				typeof payload.globalSeq === "number" ? payload.globalSeq : undefined;
+			const eventGlobalSeq =
+				payloadGlobalSeq ??
+				(typeof frame.seq === "number" ? frame.seq : undefined);
+			const isFinalAssistantChat =
+				typeof payload.state === "string" &&
+				payload.state === "final" &&
+				messageRole === "assistant";
 			// Forward chat frames in subscribe mode unconditionally.
-			// In start mode, only forward when using chat.send for
-			// slash commands — the gateway returns command responses
-			// as chat events rather than agent events.  Skip if we
-			// already received agent events (agent run started) to
-			// avoid duplicating the assistant text.
+			// In start mode, chat.send can still produce the only
+			// finalized assistant text after tool/lifecycle agent
+			// events. Keep suppressing most chat frames once agent
+			// events arrive, but allow a non-empty final assistant
+			// message through so the caller can decide whether to
+			// dedupe or surface it.
 			const forwardChat =
 				this.params.mode === "subscribe" ||
-				(this.useChatSend && !this.receivedAgentEvent);
+				(
+					this.useChatSend &&
+					(!this.receivedAgentEvent || (isFinalAssistantChat && messageTextLength > 0))
+				);
 			if (!forwardChat) {
+				if (isFinalAssistantChat) {
+					this.debugChatFinalCount += 1;
+					this.debugSuppressedChatFinalCount += 1;
+					// #region agent log
+					if (process.env.NODE_ENV !== "test") {
+						fetch("http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb", {
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+								"X-Debug-Session-Id": "822d38",
+							},
+							body: JSON.stringify({
+								sessionId: "822d38",
+								runId: this.runId ?? this.params.sessionKey ?? "pending",
+								hypothesisId: "H1",
+								location: "apps/web/lib/agent-runner.ts:1350",
+								message: "suppressed final chat event after agent events",
+								data: {
+									useChatSend: this.useChatSend,
+									receivedAgentEvent: this.receivedAgentEvent,
+									messageContentKind,
+									messageTextLength,
+									messageContentPartTypes,
+									eventGlobalSeq: eventGlobalSeq ?? null,
+									agentLifecycleCount: this.debugAgentLifecycleCount,
+									agentAssistantCount: this.debugAgentAssistantCount,
+									agentToolCount: this.debugAgentToolCount,
+									lastAgentStream: this.debugLastAgentStream,
+									lastAgentPhase: this.debugLastAgentPhase,
+								},
+								timestamp: Date.now(),
+							}),
+						}).catch(() => {});
+					}
+					// #endregion
+				}
 				return;
 			}
 			if (!this.shouldAcceptSessionEvent(sessionKey)) {
 				this.logFilteredGatewayEvent("session-key-mismatch", frame);
 				return;
 			}
-			const payloadGlobalSeq =
-				typeof payload.globalSeq === "number" ? payload.globalSeq : undefined;
-			const eventGlobalSeq =
-				payloadGlobalSeq ??
-				(typeof frame.seq === "number" ? frame.seq : undefined);
 			if (
 				typeof eventGlobalSeq === "number" &&
 				eventGlobalSeq <= this.replayFloorSeq
@@ -1341,6 +1501,9 @@ class GatewayProcessHandle
 				eventGlobalSeq > this.lastGlobalSeq
 			) {
 				this.lastGlobalSeq = eventGlobalSeq;
+			}
+			if (isFinalAssistantChat) {
+				this.debugChatFinalCount += 1;
 			}
 			const event: AgentEvent = {
 				event: "chat",
@@ -1358,7 +1521,7 @@ class GatewayProcessHandle
 				typeof payload.state === "string" &&
 				payload.state === "final"
 			) {
-				this.scheduleClose();
+				this.scheduleClose("chat_final");
 			}
 			return;
 		}
@@ -1408,14 +1571,18 @@ class GatewayProcessHandle
 	}
 
 	private armLifecycleErrorCloseTimer(): void {
+		if (this.lifecycleErrorCloseTimer) {
+			clearTimeout(this.lifecycleErrorCloseTimer);
+			this.lifecycleErrorCloseTimer = null;
+		}
 		this.lifecycleErrorRecoveryUntil = Date.now() + LIFECYCLE_ERROR_RECOVERY_MS;
-		this.clearLifecycleErrorCloseTimer();
 		this.lifecycleErrorCloseTimer = setTimeout(() => {
 			this.lifecycleErrorCloseTimer = null;
+			this.lifecycleErrorRecoveryUntil = 0;
 			if (this.finished) {
 				return;
 			}
-			this.scheduleClose();
+			this.scheduleClose("lifecycle_error_timeout");
 		}, LIFECYCLE_ERROR_RECOVERY_MS);
 	}
 
@@ -1428,11 +1595,43 @@ class GatewayProcessHandle
 		this.lifecycleErrorCloseTimer = null;
 	}
 
-	private scheduleClose(): void {
+	private scheduleClose(reason: string): void {
 		if (this.closeScheduled || this.finished) {
 			return;
 		}
 		this.closeScheduled = true;
+		this.debugCloseReason = reason;
+		// #region agent log
+		if (process.env.NODE_ENV !== "test") {
+			fetch("http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"X-Debug-Session-Id": "822d38",
+				},
+				body: JSON.stringify({
+					sessionId: "822d38",
+					runId: this.runId ?? this.params.sessionKey ?? "pending",
+					hypothesisId: "H2",
+					location: "apps/web/lib/agent-runner.ts:1472",
+					message: "gateway child scheduled close",
+					data: {
+						reason,
+						useChatSend: this.useChatSend,
+						agentLifecycleCount: this.debugAgentLifecycleCount,
+						agentAssistantCount: this.debugAgentAssistantCount,
+						agentToolCount: this.debugAgentToolCount,
+						chatFinalCount: this.debugChatFinalCount,
+						suppressedChatFinalCount: this.debugSuppressedChatFinalCount,
+						lastAgentStream: this.debugLastAgentStream,
+						lastAgentPhase: this.debugLastAgentPhase,
+						lastGlobalSeq: this.lastGlobalSeq,
+					},
+					timestamp: Date.now(),
+				}),
+			}).catch(() => {});
+		}
+		// #endregion
 		this.clearReconnectTimer();
 		setTimeout(() => {
 			if (this.finished) {

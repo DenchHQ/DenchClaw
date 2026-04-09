@@ -31,6 +31,7 @@ import {
 	isLikelyOpenAiModelId,
 	needsOpenAiSwitchAcknowledgement,
 } from "@/lib/chat-models";
+import { readConfiguredSelectedDenchModel } from "@/lib/dench-cloud-settings";
 
 export const runtime = "nodejs";
 
@@ -259,6 +260,8 @@ export async function POST(req: Request) {
 		const gatewayThreadId = sessionMeta?.gatewaySessionId ?? sessionId;
 
 		const imageAttachments = extractImageAttachmentsFromMessage(agentMessage);
+		const sessionModel =
+			normalizedModelOverride ?? readConfiguredSelectedDenchModel() ?? undefined;
 
 		try {
 			startRun({
@@ -267,6 +270,7 @@ export async function POST(req: Request) {
 				agentSessionId: gatewayThreadId,
 				overrideAgentId: effectiveAgentId,
 				modelOverride: normalizedModelOverride,
+				sessionModel,
 				imageAttachments: imageAttachments.length > 0
 					? imageAttachments
 					: undefined,

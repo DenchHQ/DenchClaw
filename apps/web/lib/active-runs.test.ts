@@ -308,6 +308,7 @@ describe("active-runs", () => {
 				sessionId,
 				message: "hello",
 				agentSessionId: sessionId,
+				sessionModel: "anthropic.claude-sonnet-4-6-v1",
 			});
 
 			subscribeToRun(
@@ -378,6 +379,7 @@ describe("active-runs", () => {
 				sessionId,
 				message: "hello",
 				agentSessionId: sessionId,
+				sessionModel: "anthropic.claude-sonnet-4-6-v1",
 			});
 
 			subscribeToRun(
@@ -399,6 +401,115 @@ describe("active-runs", () => {
 						e.delta === "[error] Agent finished with an empty upstream response.",
 				),
 			).toBe(true);
+		});
+
+		it("retries a zero-token Claude empty upstream response on gpt-5.4", async () => {
+			const firstChild = createMockChild();
+			const secondChild = createMockChild();
+			const { spawnAgentProcess } = await import("./agent-runner.js");
+			const fs = await import("node:fs");
+			vi.mocked(spawnAgentProcess)
+				.mockReturnValueOnce(firstChild as unknown as ChildProcess)
+				.mockReturnValueOnce(secondChild as unknown as ChildProcess);
+			const initialSpawnCallCount = vi.mocked(spawnAgentProcess).mock.calls.length;
+
+			const { startRun, subscribeToRun } = await import("./active-runs.js");
+
+			const sessionId = "s-empty-upstream-retry";
+			const sessionKey = `agent:main:web:${sessionId}`;
+			const transcriptSessionId = "transcript-empty-retry";
+			const sessionsJsonPath = "/tmp/mock-state/agents/main/sessions/sessions.json";
+			const transcriptPath = `/tmp/mock-state/agents/main/sessions/${transcriptSessionId}.jsonl`;
+
+			vi.mocked(fs.existsSync).mockImplementation((path) =>
+				path === sessionsJsonPath || path === transcriptPath,
+			);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (path === sessionsJsonPath) {
+					return JSON.stringify({
+						[sessionKey]: {
+							sessionId: transcriptSessionId,
+							model: "anthropic.claude-sonnet-4-6-v1",
+							modelProvider: "anthropic",
+							contextTokens: 971000,
+						},
+					});
+				}
+				if (path === transcriptPath) {
+					return `${JSON.stringify({
+						type: "message",
+						timestamp: new Date().toISOString(),
+						message: {
+							role: "assistant",
+							content: [],
+							stopReason: "stop",
+							responseId: "resp_empty_retry",
+							timestamp: Date.now(),
+							usage: { totalTokens: 0 },
+						},
+					})}\n`;
+				}
+				return "";
+			});
+
+			const events: SseEvent[] = [];
+
+			startRun({
+				sessionId,
+				message: "hello",
+				agentSessionId: sessionId,
+				sessionModel: "anthropic.claude-sonnet-4-6-v1",
+			});
+
+			subscribeToRun(
+				sessionId,
+				(event) => {
+					if (event) {events.push(event);}
+				},
+				{ replay: false },
+			);
+
+			firstChild.stdout.end();
+			await new Promise((r) => setTimeout(r, 50));
+			firstChild._emit("close", 0);
+
+			await new Promise((r) => setTimeout(r, 50));
+			expect(
+				vi.mocked(spawnAgentProcess).mock.calls.length - initialSpawnCallCount,
+			).toBe(2);
+			expect(vi.mocked(spawnAgentProcess).mock.calls.at(-1)?.[3]).toBe("gpt-5.4");
+			expect(
+				events.some(
+					(e) =>
+						e.type === "reasoning-delta" &&
+						e.delta === "Retrying with GPT-5.4 after Claude empty upstream response...",
+				),
+			).toBe(true);
+
+			secondChild._writeLine({
+				event: "agent",
+				stream: "assistant",
+				sessionKey,
+				data: { delta: "Recovered on retry" },
+			});
+			await new Promise((r) => setTimeout(r, 50));
+
+			secondChild.stdout.end();
+			await new Promise((r) => setTimeout(r, 50));
+			secondChild._emit("close", 0);
+
+			expect(
+				events.some(
+					(e) => e.type === "text-delta" && e.delta === "Recovered on retry",
+				),
+			).toBe(true);
+			expect(
+				events.some(
+					(e) =>
+						e.type === "text-delta" &&
+						e.delta === "[error] Agent finished with an empty upstream response.",
+				),
+			).toBe(false);
 		});
 
 		it("replays buffered events to a late subscriber when the run already completed", async () => {
@@ -493,6 +604,188 @@ describe("active-runs", () => {
 						e.delta.includes("No response"),
 				),
 			).toBe(false);
+		});
+
+		it("recovers a missing final answer from transcript after tool-visible activity", async () => {
+			const { child, startRun, subscribeToRun } = await setup();
+			const fs = await import("node:fs");
+
+			const sessionId = "s-tool-transcript-recovery";
+			const sessionKey = `agent:main:web:${sessionId}`;
+			const transcriptSessionId = "transcript-tool-recovery";
+			const sessionsJsonPath = "/tmp/mock-state/agents/main/sessions/sessions.json";
+			const transcriptPath = `/tmp/mock-state/agents/main/sessions/${transcriptSessionId}.jsonl`;
+
+			vi.mocked(fs.existsSync).mockImplementation((path) =>
+				path === sessionsJsonPath || path === transcriptPath,
+			);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (path === sessionsJsonPath) {
+					return JSON.stringify({
+						[sessionKey]: { sessionId: transcriptSessionId },
+					});
+				}
+				if (path === transcriptPath) {
+					return `${JSON.stringify({
+						type: "message",
+						timestamp: new Date().toISOString(),
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "Recovered tool summary" }],
+							stopReason: "stop",
+							responseId: "resp_tool_recovered",
+							timestamp: Date.now(),
+						},
+					})}\n`;
+				}
+				return "";
+			});
+
+			const events: SseEvent[] = [];
+
+			startRun({
+				sessionId,
+				message: "use a tool",
+				agentSessionId: sessionId,
+			});
+
+			subscribeToRun(
+				sessionId,
+				(event) => {
+					if (event) {events.push(event);}
+				},
+				{ replay: false },
+			);
+
+			child._writeLine({
+				event: "agent",
+				stream: "tool",
+				sessionKey,
+				data: {
+					phase: "start",
+					toolCallId: "tool-2",
+					name: "searchDocs",
+					args: { query: "chat bug" },
+				},
+			});
+			child._writeLine({
+				event: "agent",
+				stream: "tool",
+				sessionKey,
+				data: {
+					phase: "result",
+					toolCallId: "tool-2",
+					name: "searchDocs",
+					result: { text: "found it" },
+				},
+			});
+			await new Promise((r) => setTimeout(r, 50));
+
+			child.stdout.end();
+			await new Promise((r) => setTimeout(r, 50));
+			child._emit("close", 0);
+
+			expect(
+				events.some(
+					(e) => e.type === "text-delta" && e.delta === "Recovered tool summary",
+				),
+			).toBe(true);
+			expect(
+				events.some(
+					(e) =>
+						e.type === "text-delta" &&
+						e.delta === "[error] Agent finished after tool activity without a final answer.",
+				),
+			).toBe(false);
+		});
+
+		it("surfaces a specific error when tool activity ends without a final answer", async () => {
+			const { child, startRun, subscribeToRun } = await setup();
+			const fs = await import("node:fs");
+
+			const sessionId = "s-tool-empty-final";
+			const sessionKey = `agent:main:web:${sessionId}`;
+			const transcriptSessionId = "transcript-tool-empty";
+			const sessionsJsonPath = "/tmp/mock-state/agents/main/sessions/sessions.json";
+			const transcriptPath = `/tmp/mock-state/agents/main/sessions/${transcriptSessionId}.jsonl`;
+
+			vi.mocked(fs.existsSync).mockImplementation((path) =>
+				path === sessionsJsonPath || path === transcriptPath,
+			);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (path === sessionsJsonPath) {
+					return JSON.stringify({
+						[sessionKey]: { sessionId: transcriptSessionId },
+					});
+				}
+				if (path === transcriptPath) {
+					return `${JSON.stringify({
+						type: "message",
+						timestamp: new Date().toISOString(),
+						message: {
+							role: "assistant",
+							content: [],
+							stopReason: "stop",
+							responseId: "resp_tool_empty",
+							timestamp: Date.now(),
+							usage: { totalTokens: 0 },
+						},
+					})}\n`;
+				}
+				return "";
+			});
+
+			const events: SseEvent[] = [];
+
+			startRun({
+				sessionId,
+				message: "use a tool",
+				agentSessionId: sessionId,
+			});
+
+			subscribeToRun(
+				sessionId,
+				(event) => {
+					if (event) {events.push(event);}
+				},
+				{ replay: false },
+			);
+
+			child._writeLine({
+				event: "agent",
+				stream: "tool",
+				sessionKey,
+				data: {
+					phase: "start",
+					toolCallId: "tool-3",
+					name: "searchDocs",
+					args: { query: "chat bug" },
+				},
+			});
+			child._writeLine({
+				event: "agent",
+				stream: "tool",
+				sessionKey,
+				data: {
+					phase: "result",
+					toolCallId: "tool-3",
+					name: "searchDocs",
+					result: { text: "found it" },
+				},
+			});
+			await new Promise((r) => setTimeout(r, 50));
+
+			child.stdout.end();
+			await new Promise((r) => setTimeout(r, 50));
+			child._emit("close", 0);
+
+			expect(
+				events.some(
+					(e) =>
+						e.type === "text-delta" &&
+						e.delta === "[error] Agent finished after tool activity without a final answer.",
+				),
+			).toBe(true);
 		});
 
 		it("streams assistant text events for agent assistant output", async () => {

@@ -112,6 +112,20 @@ export type ActiveRun = {
 	pinnedAgentId?: string;
 	/** Full gateway session key captured at run creation time. */
 	pinnedSessionKey?: string;
+	/** Original user message so a safe empty-upstream retry can respawn the run. */
+	originalMessage?: string;
+	/** Original agent session id used to respawn the run. */
+	originalAgentSessionId?: string;
+	/** Original override agent id used to respawn the run. */
+	originalOverrideAgentId?: string;
+	/** Original model override used to respawn the run. */
+	originalModelOverride?: string;
+	/** Effective model selected when the run started, before any automatic retry logic. */
+	originalSessionModel?: string;
+	/** Original image attachments used to respawn the run. */
+	originalImageAttachments?: ImageAttachment[];
+	/** Number of automatic retries attempted after a provably empty upstream turn. */
+	_emptyUpstreamRetryCount?: number;
 };
 
 // ── Constants ──
@@ -128,6 +142,9 @@ const SUBAGENT_REGISTRY_STALENESS_MS = 15 * 60_000;
 const MAX_FILTER_DROP_LOGS = 8;
 const EMPTY_RESPONSE_EVENT_SAMPLE_LIMIT = 5;
 const TRANSCRIPT_TURN_CLOCK_SKEW_MS = 5_000;
+const MAX_EMPTY_UPSTREAM_RETRIES = 1;
+const CLAUDE_SONNET_EMPTY_MODEL_ID = "anthropic.claude-sonnet-4-6-v1";
+const EMPTY_UPSTREAM_FALLBACK_MODEL_ID = "gpt-5.4";
 
 const SILENT_REPLY_TOKEN = "NO_REPLY";
 
@@ -608,6 +625,23 @@ function sendGatewayAbort(sessionId: string): void {
 	}
 }
 
+function bindAbortControllerToChild(
+	run: ActiveRun,
+	child: AgentProcessHandle,
+): void {
+	const onAbort = () => child.kill("SIGTERM");
+	if (run.abortController.signal.aborted) {
+		child.kill("SIGTERM");
+		return;
+	}
+	run.abortController.signal.addEventListener("abort", onAbort, {
+		once: true,
+	});
+	child.on("close", () =>
+		run.abortController.signal.removeEventListener("abort", onAbort),
+	);
+}
+
 /**
  * Start a new agent run for the given session.
  * Throws if a run is already active for this session.
@@ -619,6 +653,7 @@ export function startRun(params: {
 	/** Use a specific agent ID instead of the workspace default. */
 	overrideAgentId?: string;
 	modelOverride?: string;
+	sessionModel?: string;
 	imageAttachments?: ImageAttachment[];
 }): ActiveRun {
 	const {
@@ -627,6 +662,7 @@ export function startRun(params: {
 		agentSessionId,
 		overrideAgentId,
 		modelOverride,
+		sessionModel,
 		imageAttachments,
 	} = params;
 
@@ -672,22 +708,19 @@ export function startRun(params: {
 		_waitingFinalizeTimer: null,
 		pinnedAgentId: agentId,
 		pinnedSessionKey: sessionKey,
+		originalMessage: message,
+		originalAgentSessionId: agentSessionId,
+		originalOverrideAgentId: overrideAgentId,
+		originalModelOverride: modelOverride,
+		originalSessionModel: sessionModel,
+		originalImageAttachments: imageAttachments,
+		_emptyUpstreamRetryCount: 0,
 	};
 
 	activeRuns.set(sessionId, run);
 
 	// Wire abort signal → child process kill.
-	const onAbort = () => child.kill("SIGTERM");
-	if (abortController.signal.aborted) {
-		child.kill("SIGTERM");
-	} else {
-		abortController.signal.addEventListener("abort", onAbort, {
-			once: true,
-		});
-		child.on("close", () =>
-			abortController.signal.removeEventListener("abort", onAbort),
-		);
-	}
+	bindAbortControllerToChild(run, child);
 
 	wireChildProcess(run);
 	return run;
@@ -777,6 +810,9 @@ type TranscriptAssistantTurn = {
 	messageTimestamp: number | null;
 	textParts: string[];
 	tools: TranscriptToolPart[];
+	contentTypes: string[];
+	rawContentKind: "string" | "array" | "missing" | "other";
+	usageTotalTokens?: number;
 };
 
 function readTranscriptEntriesForSession(
@@ -823,11 +859,25 @@ function readLatestTranscriptAssistantTurn(
 		if (role === "assistant") {
 			const textParts: string[] = [];
 			const tools: TranscriptToolPart[] = [];
+			const rawContent = msg.content;
+			const rawContentKind =
+				typeof rawContent === "string"
+					? "string"
+					: Array.isArray(rawContent)
+						? "array"
+						: rawContent == null
+							? "missing"
+							: "other";
+			const content = Array.isArray(rawContent) ? rawContent : [];
+			const contentTypes: string[] = [];
 			for (const rawPart of content) {
 				const part = asRecord(rawPart);
 				if (!part) {
+					contentTypes.push("non-record");
 					continue;
 				}
+				const partType = typeof part.type === "string" ? part.type : "unknown";
+				contentTypes.push(partType);
 				if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
 					textParts.push(part.text);
 					continue;
@@ -847,6 +897,13 @@ function readLatestTranscriptAssistantTurn(
 					: typeof entry.timestamp === "string"
 						? Date.parse(entry.timestamp)
 						: Number.NaN;
+			const usage = asRecord(msg.usage);
+			const usageTotalTokens =
+				typeof usage?.totalTokens === "number"
+					? usage.totalTokens
+					: typeof usage?.total_tokens === "number"
+						? usage.total_tokens
+						: undefined;
 			latestAssistantTurn = {
 				sessionId: transcript.sessionId,
 				responseId: typeof msg.responseId === "string" ? msg.responseId : undefined,
@@ -854,6 +911,9 @@ function readLatestTranscriptAssistantTurn(
 				messageTimestamp: Number.isFinite(messageTimestamp) ? messageTimestamp : null,
 				textParts,
 				tools,
+				contentTypes,
+				rawContentKind,
+				usageTotalTokens,
 			};
 			continue;
 		}
@@ -1584,6 +1644,7 @@ function wireChildProcess(run: ActiveRun): void {
 	let textStarted = false;
 	let reasoningStarted = false;
 	let everSentResponseActivity = false;
+	let everSentAssistantText = false;
 	let statusReasoningActive = false;
 	let waitingStatusAnnounced = false;
 	let agentErrorReported = false;
@@ -1698,6 +1759,7 @@ function wireChildProcess(run: ActiveRun): void {
 			textStarted = true;
 		}
 		everSentResponseActivity = true;
+		everSentAssistantText = true;
 		emit({ type: "text-delta", id: currentTextId, delta: text });
 		accAppendText(text);
 		closeText();
@@ -1885,6 +1947,7 @@ function wireChildProcess(run: ActiveRun): void {
 					textStarted = true;
 				}
 				everSentResponseActivity = true;
+				everSentAssistantText = true;
 				emit({ type: "text-delta", id: currentTextId, delta: chunk });
 				accAppendText(chunk);
 			}
@@ -1903,6 +1966,7 @@ function wireChildProcess(run: ActiveRun): void {
 							textStarted = true;
 						}
 						everSentResponseActivity = true;
+						everSentAssistantText = true;
 						const md = `\n![media](${url.trim()})\n`;
 						emit({
 							type: "text-delta",
@@ -2051,6 +2115,32 @@ function wireChildProcess(run: ActiveRun): void {
 		if (ev.event === "chat") {
 			const text = extractAssistantTextFromChatPayload(ev.data);
 			if (text) {
+				const emittedFromChat = parentAssistantChunksCurrentTurn === 0;
+				// #region agent log
+				if (process.env.NODE_ENV !== "test") {
+					fetch("http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb", {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							"X-Debug-Session-Id": "822d38",
+						},
+						body: JSON.stringify({
+							sessionId: "822d38",
+							runId: run.sessionId,
+							hypothesisId: "H9",
+							location: "apps/web/lib/active-runs.ts:2078",
+							message: emittedFromChat
+								? "chat final text emitted from active run"
+								: "chat final text ignored because assistant chunks already streamed",
+							data: {
+								parentAssistantChunksCurrentTurn,
+								textLength: text.length,
+							},
+							timestamp: Date.now(),
+						}),
+					}).catch(() => {});
+				}
+				// #endregion
 				if (parentAssistantChunksCurrentTurn === 0) {
 					emitAssistantFinalText(text);
 				}
@@ -2229,7 +2319,7 @@ function wireChildProcess(run: ActiveRun): void {
 
 		const exitedClean = code === 0 || code === null;
 		const transcriptBackfill =
-			!everSentResponseActivity && exitedClean
+			!everSentAssistantText && exitedClean
 				? maybeBackfillMissingResponseFromTranscript()
 				: null;
 		const latestTranscriptTurn = transcriptBackfill?.latestAssistantTurn ?? null;
@@ -2248,6 +2338,42 @@ function wireChildProcess(run: ActiveRun): void {
 			if (rawStdoutEventSamples.length > 0) {
 				console.warn("[active-runs] Last child stdout events before empty response", rawStdoutEventSamples);
 			}
+			// #region agent log
+			if (process.env.NODE_ENV !== "test") {
+				fetch("http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"X-Debug-Session-Id": "822d38",
+					},
+					body: JSON.stringify({
+						sessionId: "822d38",
+						runId: run.sessionId,
+						hypothesisId: "H4",
+						location: "apps/web/lib/active-runs.ts:2241",
+						message: "active run finished without response activity",
+						data: {
+							exitCode: code,
+							exitedClean,
+							elapsed,
+							hasStderr,
+							agentErrorReported,
+							rawStdoutLines: rawStdoutLineCount,
+							droppedSessionEvents: droppedSessionEventCount,
+							transcriptFound: latestTranscriptTurn !== null,
+							transcriptStopReason: latestTranscriptTurn?.stopReason ?? null,
+							transcriptResponseId: latestTranscriptTurn?.responseId ?? null,
+							transcriptTextPartCount: latestTranscriptTurn?.textParts.length ?? 0,
+							transcriptToolCount: latestTranscriptTurn?.tools.length ?? 0,
+							transcriptContentTypes: latestTranscriptTurn?.contentTypes ?? [],
+							transcriptRawContentKind: latestTranscriptTurn?.rawContentKind ?? null,
+							transcriptUsageTotalTokens: latestTranscriptTurn?.usageTotalTokens ?? null,
+						},
+						timestamp: Date.now(),
+					}),
+				}).catch(() => {});
+			}
+			// #endregion
 		}
 
 		if (!everSentResponseActivity && !exitedClean) {
@@ -2264,10 +2390,126 @@ function wireChildProcess(run: ActiveRun): void {
 				transcriptWasCurrentTurn &&
 				latestTranscriptTurn.textParts.length === 0 &&
 				latestTranscriptTurn.tools.length === 0;
+			const transcriptHadZeroUsage =
+				(latestTranscriptTurn?.usageTotalTokens ?? 0) === 0;
+			const sourceModel =
+				run.originalSessionModel ?? run.originalModelOverride;
+			const retryModelOverride =
+				sourceModel === CLAUDE_SONNET_EMPTY_MODEL_ID
+					? EMPTY_UPSTREAM_FALLBACK_MODEL_ID
+					: run.originalModelOverride;
+			const switchingModelsOnRetry =
+				typeof retryModelOverride === "string" &&
+				retryModelOverride !== run.originalModelOverride;
+			const shouldRetryEmptyUpstream =
+				transcriptWasEmpty &&
+				transcriptHadZeroUsage &&
+				!agentErrorReported &&
+				droppedSessionEventCount === 0 &&
+				rawStdoutLineCount <= 2 &&
+				(run._emptyUpstreamRetryCount ?? 0) < MAX_EMPTY_UPSTREAM_RETRIES &&
+				typeof run.originalMessage === "string";
+			if (shouldRetryEmptyUpstream) {
+				run._emptyUpstreamRetryCount = (run._emptyUpstreamRetryCount ?? 0) + 1;
+				openStatusReasoning(
+					switchingModelsOnRetry
+						? "Retrying with GPT-5.4 after Claude empty upstream response..."
+						: "Retrying after empty upstream response...",
+				);
+				// #region agent log
+				if (process.env.NODE_ENV !== "test") {
+					fetch("http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb", {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							"X-Debug-Session-Id": "822d38",
+						},
+						body: JSON.stringify({
+							sessionId: "822d38",
+							runId: run.sessionId,
+							hypothesisId: "H10",
+							location: "apps/web/lib/active-runs.ts:2349",
+							message: "retrying clean empty-upstream response",
+							data: {
+								retryCount: run._emptyUpstreamRetryCount,
+								rawStdoutLines: rawStdoutLineCount,
+								droppedSessionEvents: droppedSessionEventCount,
+								transcriptResponseId: latestTranscriptTurn?.responseId ?? null,
+								transcriptUsageTotalTokens: latestTranscriptTurn?.usageTotalTokens ?? null,
+								sourceModel: sourceModel ?? null,
+								retryModelOverride: retryModelOverride ?? null,
+							},
+							timestamp: Date.now(),
+						}),
+					}).catch(() => {});
+				}
+				// #endregion
+				try {
+					const originalMessage = run.originalMessage;
+					if (typeof originalMessage !== "string") {
+						closeReasoning();
+						emitError("Agent finished with an empty upstream response.");
+						return;
+					}
+					const retryChild = spawnAgentProcess(
+						originalMessage,
+						run.originalAgentSessionId,
+						run.originalOverrideAgentId,
+						retryModelOverride,
+						run.originalImageAttachments,
+					);
+					run.childProcess = retryChild;
+					bindAbortControllerToChild(run, retryChild);
+					wireChildProcess(run);
+					return;
+				} catch {
+					closeReasoning();
+				}
+			}
 			emitError(
 				transcriptWasEmpty
 					? "Agent finished with an empty upstream response."
 					: "No response from agent.",
+			);
+		} else if (!everSentAssistantText && exitedClean) {
+			const transcriptWasCurrentTurn =
+				transcriptBackfill?.isCurrentTurn === true && latestTranscriptTurn !== null;
+			const transcriptWasEmpty =
+				transcriptWasCurrentTurn &&
+				latestTranscriptTurn.textParts.length === 0 &&
+				latestTranscriptTurn.tools.length === 0;
+			// #region agent log
+			if (process.env.NODE_ENV !== "test") {
+				fetch("http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"X-Debug-Session-Id": "822d38",
+					},
+					body: JSON.stringify({
+						sessionId: "822d38",
+						runId: run.sessionId,
+						hypothesisId: "H11",
+						location: "apps/web/lib/active-runs.ts:2361",
+						message: "run ended after tool activity without assistant text",
+						data: {
+							rawStdoutLines: rawStdoutLineCount,
+							droppedSessionEvents: droppedSessionEventCount,
+							transcriptFound: latestTranscriptTurn !== null,
+							transcriptStopReason: latestTranscriptTurn?.stopReason ?? null,
+							transcriptResponseId: latestTranscriptTurn?.responseId ?? null,
+							transcriptTextPartCount: latestTranscriptTurn?.textParts.length ?? 0,
+							transcriptToolCount: latestTranscriptTurn?.tools.length ?? 0,
+						},
+						timestamp: Date.now(),
+					}),
+				}).catch(() => {});
+			}
+			// #endregion
+			emitError(
+				transcriptWasEmpty
+					? "Agent finished after tool activity without a final answer."
+					: "Agent finished after tool activity without a recoverable final answer.",
 			);
 		} else {
 			closeText();

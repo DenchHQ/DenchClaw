@@ -2,7 +2,7 @@
  * POST /api/chat/stop
  *
  * Abort an active agent run. Called by the Stop button.
- * Works for both parent sessions (by sessionId) and subagent sessions (by sessionKey).
+ * Works for parent sessions (by sessionId) and any session-key backed run.
  */
 import { abortRun, getActiveRun } from "@/lib/active-runs";
 import { listSubagentsForRequesterSession } from "@/lib/subagent-registry";
@@ -17,11 +17,15 @@ export async function POST(req: Request) {
 		.json()
 		.catch(() => ({}));
 
-	const isSubagentSession = typeof body.sessionKey === "string" && body.sessionKey.includes(":subagent:");
-	const runKey = isSubagentSession && body.sessionKey ? body.sessionKey : body.sessionId;
+	const sessionKey =
+		typeof body.sessionKey === "string" && body.sessionKey.trim()
+			? body.sessionKey.trim()
+			: undefined;
+	const isSubagentSession = Boolean(sessionKey?.includes(":subagent:"));
+	const runKey = sessionKey ?? body.sessionId;
 
 	if (!runKey) {
-		return new Response("sessionId or subagent sessionKey required", { status: 400 });
+		return new Response("sessionId or sessionKey required", { status: 400 });
 	}
 
 	const run = getActiveRun(runKey);
@@ -30,7 +34,7 @@ export async function POST(req: Request) {
 	const aborted = canAbort ? abortRun(runKey) : false;
 	let abortedChildren = 0;
 
-	if (!isSubagentSession && body.sessionId && body.cascadeChildren) {
+	if (!sessionKey && body.sessionId && body.cascadeChildren) {
 		const fallbackAgentId = resolveActiveAgentId();
 		const requesterSessionKey = resolveSessionKey(body.sessionId, fallbackAgentId);
 		for (const subagent of listSubagentsForRequesterSession(requesterSessionKey)) {

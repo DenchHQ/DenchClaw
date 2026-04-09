@@ -110,4 +110,33 @@ describe("POST /api/chat/stop", () => {
     expect(listSubagentsForRequesterSession).not.toHaveBeenCalled();
     expect(json).toEqual({ aborted: true, abortedChildren: 0 });
   });
+
+  it("stops a gateway-backed session when a non-subagent sessionKey is provided", async () => {
+    const { abortRun, getActiveRun } = await import("@/lib/active-runs");
+    const { listSubagentsForRequesterSession } = await import("@/lib/subagent-registry");
+
+    vi.mocked(getActiveRun).mockImplementation(((runKey: string) => {
+      if (runKey === "agent:main:telegram:channel-1") {
+        return { status: "running" };
+      }
+      return undefined;
+    }) as never);
+    vi.mocked(abortRun).mockReturnValue(true);
+
+    const { POST } = await import("./route.js");
+    const req = new Request("http://localhost/api/chat/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionKey: "agent:main:telegram:channel-1",
+      }),
+    });
+
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(abortRun).toHaveBeenCalledWith("agent:main:telegram:channel-1");
+    expect(listSubagentsForRequesterSession).not.toHaveBeenCalled();
+    expect(json).toEqual({ aborted: true, abortedChildren: 0 });
+  });
 });

@@ -87,6 +87,14 @@ function resolvePrimaryModel(config: UnknownRecord): string | null {
   return typeof primary === "string" && primary.trim() ? primary.trim() : null;
 }
 
+export function readConfiguredSelectedDenchModel(): string | null {
+  const config = readConfig();
+  const settings = readConfiguredDenchCloudSettings(config);
+  return typeof settings.selectedModel === "string" && settings.selectedModel.trim()
+    ? settings.selectedModel.trim()
+    : null;
+}
+
 function ensureRecord(parent: UnknownRecord, key: string): UnknownRecord {
   const existing = asRecord(parent[key]);
   if (existing) return existing;

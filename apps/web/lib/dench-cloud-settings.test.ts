@@ -88,7 +88,6 @@ const mocks = vi.hoisted(() => {
       tools: {
         alsoAllow: [
           "composio_search_tools",
-          "composio_resolve_tool",
           "composio_call_tool",
         ],
       },
@@ -132,12 +131,21 @@ vi.mock("./integrations", () => ({
   refreshIntegrationsRuntime: mocks.refreshIntegrationsRuntime,
 }));
 
-import { saveApiKey, saveVoiceId, selectModel } from "./dench-cloud-settings";
+import {
+  readConfiguredSelectedDenchModel,
+  saveApiKey,
+  saveVoiceId,
+  selectModel,
+} from "./dench-cloud-settings";
 
 describe("dench cloud settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.state.configText = "{}\n";
+    mocks.readConfiguredDenchCloudSettings.mockReturnValue({
+      gatewayUrl: null,
+      selectedModel: null,
+    });
     mocks.validateDenchCloudApiKey.mockResolvedValue(undefined);
     mocks.fetchDenchCloudCatalog.mockResolvedValue({
       source: "live",
@@ -187,9 +195,17 @@ describe("dench cloud settings", () => {
     );
     expect(written.tools.alsoAllow).toEqual([
       "composio_call_tool",
-      "composio_resolve_tool",
       "composio_search_tools",
     ]);
+  });
+
+  it("reads the configured selected Dench model synchronously", () => {
+    mocks.readConfiguredDenchCloudSettings.mockReturnValue({
+      gatewayUrl: "https://gateway.merseoriginals.com",
+      selectedModel: "anthropic.claude-sonnet-4-6-v1",
+    });
+
+    expect(readConfiguredSelectedDenchModel()).toBe("anthropic.claude-sonnet-4-6-v1");
   });
 
   it("refreshes integrations when switching the primary model to Dench Cloud", async () => {
@@ -212,7 +228,6 @@ describe("dench cloud settings", () => {
     expect(written.mcp.servers.composio.headers.Authorization).toBe("Bearer dc-key");
     expect(written.tools.alsoAllow).toEqual([
       "composio_call_tool",
-      "composio_resolve_tool",
       "composio_search_tools",
     ]);
   });

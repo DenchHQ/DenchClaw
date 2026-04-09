@@ -244,6 +244,13 @@ function getRunningToolLabel(parts: UIMessage["parts"]): string | null {
 	return null;
 }
 
+export function hasAssistantRunningTool(message: UIMessage | null): boolean {
+	return Boolean(
+		message?.role === "assistant" &&
+		getRunningToolLabel(message.parts),
+	);
+}
+
 export function getStreamActivityLabel({
 	loadingSession,
 	isReconnecting,

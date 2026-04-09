@@ -44,6 +44,10 @@ vi.mock("@/app/api/sessions/shared", () => ({
   getAgentSession: vi.fn(() => undefined),
 }));
 
+vi.mock("@/lib/dench-cloud-settings", () => ({
+  readConfiguredSelectedDenchModel: vi.fn(() => null),
+}));
+
 describe("Chat API routes", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -84,6 +88,9 @@ describe("Chat API routes", () => {
     }));
     vi.mock("@/app/api/sessions/shared", () => ({
       getAgentSession: vi.fn(() => undefined),
+    }));
+    vi.mock("@/lib/dench-cloud-settings", () => ({
+      readConfiguredSelectedDenchModel: vi.fn(() => null),
     }));
   });
 
@@ -175,6 +182,36 @@ describe("Chat API routes", () => {
         expect.objectContaining({
           sessionId: "s1",
           modelOverride: "gpt-5.4",
+        }),
+      );
+    });
+
+    it("passes the configured selected model into startRun when no override is provided", async () => {
+      const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
+      const { readConfiguredSelectedDenchModel } = await import("@/lib/dench-cloud-settings");
+      vi.mocked(hasActiveRun).mockReturnValue(false);
+      vi.mocked(subscribeToRun).mockReturnValue(() => {});
+      vi.mocked(readConfiguredSelectedDenchModel).mockReturnValue("anthropic.claude-sonnet-4-6-v1");
+
+      const { POST } = await import("./route.js");
+      const req = new Request("http://localhost/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+          ],
+          sessionId: "s1",
+        }),
+      });
+
+      await POST(req);
+
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "s1",
+          sessionModel: "anthropic.claude-sonnet-4-6-v1",
+          modelOverride: undefined,
         }),
       );
     });
