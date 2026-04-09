@@ -266,7 +266,17 @@ function buildComposioSearchCardData(output?: Record<string, unknown>) {
 	const accountCount = typeof recommended?.account_count === "number" ? recommended.account_count : accountCandidates.length;
 	const toolkitRec = asRecordValue(recommended?.toolkit);
 	const toolkitName = readStringValue(toolkitRec?.name) ?? readStringValue(toolkitRec?.slug);
+	const resultCount = typeof output.result_count === "number" ? output.result_count : results.length;
+	const connectedToolkits = readStringArrayValue(output.connected_toolkits);
+	const toolkitFilter = readStringValue(output.toolkit_filter) ?? readStringValue(output.app_filter);
+	const resultSummary = resultCount > 0
+		? `${resultCount} tool${resultCount === 1 ? "" : "s"} found`
+		: toolkitFilter
+			? `No ${toolkitFilter} tools matched`
+			: "No tools matched";
 	return {
+		resultSummary,
+		connectedToolkits: connectedToolkits.length > 0 ? connectedToolkits.join(", ") : null,
 		topTools,
 		sessionId: readStringValue(output.search_session_id),
 		accountSummary:
@@ -1642,6 +1652,16 @@ function ToolStep({
 							border: "1px solid var(--color-border)",
 						}}
 					>
+						<SummaryRow
+							label="Results"
+							value={composioSearchCard.resultSummary}
+						/>
+						{composioSearchCard.connectedToolkits && (
+							<SummaryRow
+								label="Connected"
+								value={composioSearchCard.connectedToolkits}
+							/>
+						)}
 						{composioSearchCard.topTools.length > 0 && (
 							<SummaryRow
 								label="Top matches"
