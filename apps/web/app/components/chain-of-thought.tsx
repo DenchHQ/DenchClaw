@@ -249,27 +249,31 @@ function readStringArrayValue(value: unknown): string[] {
 
 function buildComposioSearchCardData(output?: Record<string, unknown>) {
 	if (!output) {return null;}
-	const recommended = asRecordValue(output.recommended_result);
-	const topTools = asRecordArrayValue(output.results)
+	const results = asRecordArrayValue(output.results);
+	const recommended = asRecordValue(output.recommended_result) ?? results[0];
+	const topTools = results
 		.slice(0, 3)
-		.map((result) => readStringValue(result.tool))
+		.map((result) => readStringValue(result.tool) ?? readStringValue(result.tool_slug) ?? readStringValue(result.name))
 		.filter((tool): tool is string => Boolean(tool));
 	const selectedAccount = asRecordValue(recommended?.selected_account);
-	const accountCandidates = asRecordArrayValue(recommended?.account_candidates);
-	const inputSchema = asRecordValue(recommended?.input_schema);
+	const accountCandidates = asRecordArrayValue(recommended?.account_candidates ?? recommended?.accounts);
+	const inputSchema = asRecordValue(recommended?.input_schema ?? recommended?.input_parameters);
 	const schemaProperties = asRecordValue(inputSchema?.properties);
 	const schemaPropertyNames = schemaProperties ? Object.keys(schemaProperties) : [];
 	const requiredFields = readStringArrayValue(inputSchema?.required);
 	const planSteps = readStringArrayValue(recommended?.recommended_plan_steps ?? output.next_steps_guidance).slice(0, 3);
 	const pitfalls = readStringArrayValue(recommended?.known_pitfalls).slice(0, 2);
+	const accountCount = typeof recommended?.account_count === "number" ? recommended.account_count : accountCandidates.length;
+	const toolkitRec = asRecordValue(recommended?.toolkit);
+	const toolkitName = readStringValue(toolkitRec?.name) ?? readStringValue(toolkitRec?.slug);
 	return {
 		topTools,
 		sessionId: readStringValue(output.search_session_id),
 		accountSummary:
 			readStringValue(selectedAccount?.display_label) ??
-			(accountCandidates.length > 0
-				? `${accountCandidates.length} connected account${accountCandidates.length === 1 ? "" : "s"}`
-				: null),
+			(accountCount > 0
+				? `${accountCount} connected account${accountCount === 1 ? "" : "s"}${toolkitName ? ` (${toolkitName})` : ""}`
+				: recommended?.is_connected === true ? "Connected" : null),
 		schemaSummary:
 			schemaPropertyNames.length > 0
 				? `${schemaPropertyNames.length} input fields${requiredFields.length > 0 ? `, ${requiredFields.length} required` : ""}`
@@ -288,6 +292,7 @@ function buildComposioCallCardData(
 	const recovery = asRecordValue(output?.recovery);
 	const toolName =
 		readStringValue(args?.tool_name) ??
+		readStringValue(args?.tool_slug) ??
 		readStringValue(output?.tool_slug) ??
 		readStringValue(execution?.tool_name);
 	if (!toolName) {return null;}
@@ -301,23 +306,25 @@ function buildComposioCallCardData(
 					return `${key}: ${formatted}`;
 				})
 		: [];
+	const structuredContent = asRecordValue(output?.structuredContent);
+	const dataSource = structuredContent ?? output;
 	const items =
-		Array.isArray(output?.data) ? output.data :
-		Array.isArray(output?.items) ? output.items :
+		Array.isArray(dataSource?.data) ? dataSource.data :
+		Array.isArray(dataSource?.items) ? dataSource.items :
 		undefined;
 	const resultSummary =
 		items
 			? `${items.length} result${items.length === 1 ? "" : "s"}`
 			: readStringValue(output?.status) ?? null;
 	const paginationBits = [
-		Object.hasOwn(output ?? {}, "has_more")
-			? `has_more: ${String(output?.has_more)}`
+		Object.hasOwn(dataSource ?? {}, "has_more")
+			? `has_more: ${String(dataSource?.has_more)}`
 			: null,
-		readStringValue(output?.next_cursor)
-			? `next_cursor: ${readStringValue(output?.next_cursor)}`
+		readStringValue(dataSource?.next_cursor)
+			? `next_cursor: ${readStringValue(dataSource?.next_cursor)}`
 			: null,
-		readStringValue(output?.starting_after)
-			? `starting_after: ${readStringValue(output?.starting_after)}`
+		readStringValue(dataSource?.starting_after)
+			? `starting_after: ${readStringValue(dataSource?.starting_after)}`
 			: null,
 	].filter((value): value is string => Boolean(value));
 	const recoveryBits = [
@@ -329,17 +336,21 @@ function buildComposioCallCardData(
 			? "refreshed execution_ref returned"
 			: null,
 	].filter((value): value is string => Boolean(value));
+	const toolSlugParts = toolName.split("_");
+	const inferredToolkit = toolSlugParts.length > 1 ? toolSlugParts[0]?.toLowerCase() : null;
 	return {
 		app:
 			readStringValue(args?.app) ??
 			readStringValue(output?.toolkit) ??
-			readStringValue(execution?.toolkit),
+			readStringValue(execution?.toolkit) ??
+			inferredToolkit,
 		toolName,
 		account:
 			readStringValue(args?.account) ??
 			readStringValue(output?.account) ??
 			readStringValue(execution?.account) ??
 			readStringValue(args?.connected_account_id) ??
+			readStringValue(output?.connectedAccountId) ??
 			readStringValue(args?.account_identity),
 		keyArgs,
 		pagination: paginationBits.length > 0 ? paginationBits.join(" | ") : null,
