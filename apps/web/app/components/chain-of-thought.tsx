@@ -383,7 +383,7 @@ function classifyTool(
 	args?: Record<string, unknown>,
 	output?: Record<string, unknown>,
 ): StepKind {
-	if (name === "composio_search_tools" || name === "composio_call_tool") {
+	if (name === "dench_search_integrations" || name === "dench_execute_integrations" || name === "composio_search_tools" || name === "composio_call_tool") {
 		return "composio";
 	}
 	const n = name.toLowerCase().replace(/[_-]/g, "");
@@ -487,9 +487,9 @@ function buildStepLabel(
 
 	switch (kind) {
 		case "composio":
-			return toolName === "composio_search_tools"
+			return toolName === "dench_search_integrations" || toolName === "composio_search_tools"
 				? denchIntegrationsBrand.searchLabel
-				: toolName === "composio_call_tool"
+				: toolName === "dench_execute_integrations" || toolName === "composio_call_tool"
 					? denchIntegrationsBrand.callLabel
 					: denchIntegrationsBrand.genericToolLabel;
 		case "search": {
@@ -1366,8 +1366,8 @@ function ToolStep({
 	errorText?: string;
 }) {
 	const kind = classifyTool(toolName, args, output);
-	const isComposioSearch = toolName === "composio_search_tools";
-	const isComposioCall = toolName === "composio_call_tool";
+	const isComposioSearch = toolName === "dench_search_integrations" || toolName === "composio_search_tools";
+	const isComposioCall = toolName === "dench_execute_integrations" || toolName === "composio_call_tool";
 	const isComposioTool = isComposioSearch || isComposioCall;
 	// Show output by default for exec/command tools — these are the most
 	// useful to see inline.  Other tools default to collapsed.
