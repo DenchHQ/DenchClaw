@@ -149,6 +149,7 @@ type OpenClawCliAvailability = {
   command: string;
   globalBinDir?: string;
   shellCommandPath?: string;
+  error?: string;
 };
 
 type OutputLineHandler = (line: string, stream: "stdout" | "stderr") => void;
@@ -1657,6 +1658,30 @@ function isProjectLocalOpenClawPath(commandPath: string | undefined): boolean {
   return normalized.includes("/node_modules/.bin/openclaw");
 }
 
+function resolveUserPrefixBinDir(prefixDir: string): string {
+  return IS_WINDOWS ? prefixDir : path.join(prefixDir, "bin");
+}
+
+function resolveOpenClawCommandInDir(binDir: string): string | undefined {
+  const candidates = IS_WINDOWS
+    ? [path.join(binDir, "openclaw.cmd"), path.join(binDir, "openclaw.exe")]
+    : [path.join(binDir, "openclaw")];
+  return candidates.find((c) => existsSync(c));
+}
+
+function extractNpmErrorHint(stderr: string): string | undefined {
+  const lower = stderr.toLowerCase();
+  if (lower.includes("eacces") || lower.includes("eperm") || lower.includes("permission denied")) {
+    return IS_WINDOWS
+      ? "Permission denied. Try running your terminal as Administrator."
+      : "Permission denied. Try: sudo npm install -g openclaw";
+  }
+  if (lower.includes("enotfound") || lower.includes("enetunreach") || lower.includes("etimedout")) {
+    return "Network error. Check your internet connection and retry.";
+  }
+  return undefined;
+}
+
 async function ensureOpenClawCliAvailable(params: {
   stateDir: string;
   showProgress: boolean;
@@ -1696,6 +1721,7 @@ async function ensureOpenClawCliAvailable(params: {
 
   let installed = false;
   let installedAt: number | undefined;
+  let fallbackBinDir: string | undefined;
   progress.startStage("Ensuring openclaw@latest is installed globally");
   if (!globalBefore.installed) {
     const install = await runCommandWithTimeout(["npm", "install", "-g", "openclaw@latest"], {
@@ -1705,18 +1731,56 @@ async function ensureOpenClawCliAvailable(params: {
         progress.output(`npm install: ${line}`);
       },
     }).catch(() => null);
+
     if (!install || install.code !== 0) {
-      progress.fail("OpenClaw global install failed.");
-      return {
-        available: false,
-        installed: false,
-        version: undefined,
-        command: "openclaw",
-      };
+      const globalError = install?.stderr ?? "";
+      progress.output("Global install failed; trying user-prefix fallback...");
+
+      const userPrefix = path.join(params.stateDir, "npm-global");
+      mkdirSync(userPrefix, { recursive: true });
+      const fallbackInstall = await runCommandWithTimeout(
+        ["npm", "install", "--global", "--prefix", userPrefix, "openclaw@latest"],
+        {
+          timeoutMs: 10 * 60_000,
+          env: cleanNpmGlobalEnv(),
+          onOutputLine: (line) => {
+            progress.output(`npm install (prefix): ${line}`);
+          },
+        },
+      ).catch(() => null);
+
+      if (!fallbackInstall || fallbackInstall.code !== 0) {
+        const fallbackError = fallbackInstall?.stderr ?? "";
+        const combinedStderr = globalError || fallbackError;
+        const hint = extractNpmErrorHint(combinedStderr);
+        const errorLines = [
+          "npm install -g openclaw@latest failed.",
+          hint,
+          combinedStderr ? `npm output: ${firstNonEmptyLine(combinedStderr) ?? combinedStderr.slice(0, 200).trim()}` : undefined,
+        ].filter(Boolean).join("\n");
+        progress.fail("OpenClaw install failed (global and user-prefix).");
+        return {
+          available: false,
+          installed: false,
+          version: undefined,
+          command: "openclaw",
+          error: errorLines,
+        };
+      }
+
+      fallbackBinDir = resolveUserPrefixBinDir(userPrefix);
+      const currentPath = process.env.PATH ?? "";
+      if (!currentPath.split(path.delimiter).includes(fallbackBinDir)) {
+        process.env.PATH = `${fallbackBinDir}${path.delimiter}${currentPath}`;
+      }
+      installed = true;
+      installedAt = Date.now();
+      progress.completeStage("installed openclaw@latest (user-prefix fallback)");
+    } else {
+      installed = true;
+      installedAt = Date.now();
+      progress.completeStage("installed openclaw@latest");
     }
-    installed = true;
-    installedAt = Date.now();
-    progress.completeStage("installed openclaw@latest");
   } else {
     progress.completeStage("already installed; skipping install");
   }
@@ -1727,14 +1791,15 @@ async function ensureOpenClawCliAvailable(params: {
       progress.output(`npm prefix: ${line}`);
     }),
     resolveShellOpenClawPath((line) => {
-      progress.output(`${process.platform === "win32" ? "where" : "which"}: ${line}`);
+      progress.output(`${IS_WINDOWS ? "where" : "which"}: ${line}`);
     }),
   ]);
   progress.completeStage("path discovery complete");
 
   const globalAfter = installed ? { installed: true, version: globalBefore.version } : globalBefore;
+  const fallbackCommand = fallbackBinDir ? resolveOpenClawCommandInDir(fallbackBinDir) : undefined;
   const globalCommand = resolveGlobalOpenClawCommand(globalBinDir);
-  const command = globalCommand ?? "openclaw";
+  const command = globalCommand ?? fallbackCommand ?? "openclaw";
   progress.startStage("Verifying OpenClaw CLI responsiveness");
   const check = await runOpenClaw(command, ["--version"], 4_000, "capture", undefined, (line) => {
     progress.output(`openclaw --version: ${line}`);
@@ -1744,14 +1809,15 @@ async function ensureOpenClawCliAvailable(params: {
   );
 
   const version = normalizeVersionOutput(check?.stdout || check?.stderr || globalAfter.version);
-  const available = Boolean(globalAfter.installed && check && check.code === 0);
+  const available = Boolean((globalAfter.installed || fallbackCommand) && check && check.code === 0);
+  const effectiveBinDir = globalBinDir ?? fallbackBinDir;
   progress.startStage("Caching OpenClaw check result");
   if (available) {
     writeOpenClawCliCheckCache(params.stateDir, {
       available,
       command,
       version,
-      globalBinDir,
+      globalBinDir: effectiveBinDir,
       shellCommandPath,
       installedAt,
     });
@@ -1766,7 +1832,7 @@ async function ensureOpenClawCliAvailable(params: {
     installedAt,
     version,
     command,
-    globalBinDir,
+    globalBinDir: effectiveBinDir,
     shellCommandPath,
   };
 }
@@ -3019,12 +3085,17 @@ export async function bootstrapCommand(
     throw new Error(
       [
         "OpenClaw CLI is required but unavailable.",
-        "Install it with: npm install -g openclaw",
+        installResult.error,
+        !installResult.error
+          ? IS_WINDOWS
+            ? "Try running your terminal as Administrator and run: npm install -g openclaw"
+            : "Try: sudo npm install -g openclaw"
+          : undefined,
         installResult.globalBinDir
           ? `Expected global binary directory: ${installResult.globalBinDir}`
-          : "",
+          : undefined,
       ]
-        .filter((line) => line.length > 0)
+        .filter((line): line is string => typeof line === "string" && line.length > 0)
         .join("\n"),
     );
   }
