@@ -100,10 +100,10 @@
 
 .dark {
   /* Background / Surface — warm neutral, layered for depth */
-  --color-bg: #242424;
+  --color-bg: #222222;
   --color-surface: #2e2e2e;
-  --color-sidebar-bg: #242424;
-  --color-main-bg: #242424;
+  --color-sidebar-bg: #1c1c1c;
+  --color-main-bg: #282828;
   --color-surface-hover: #383838;
   --color-surface-raised: #333333;
 
