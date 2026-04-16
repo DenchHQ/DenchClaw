@@ -3216,7 +3216,7 @@ export async function bootstrapCommand(
     onboardArgv.push("--skip-skills");
   }
 
-  onboardArgv.push("--accept-risk", "--skip-ui");
+  onboardArgv.push("--accept-risk", "--skip-ui", "--skip-channels");
   if (daemonless) {
     onboardArgv.push("--skip-health");
   }
