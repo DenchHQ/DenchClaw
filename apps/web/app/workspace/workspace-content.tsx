@@ -36,6 +36,7 @@ import { useSearchIndex } from "@/lib/search-index";
 import { parseWorkspaceLink, isWorkspaceLink, parseUrlState, buildUrl, buildWorkspaceSyncParams, type WorkspaceUrlState } from "@/lib/workspace-links";
 import { isCodeFile } from "@/lib/report-utils";
 import { displayObjectName, displayObjectNameSingular } from "@/lib/object-display-name";
+import { isSeedPeopleObjectId, isSeedCompanyObjectId } from "@/lib/seed-object-ids";
 import { CronDashboard } from "../components/cron/cron-dashboard";
 import { SkillStorePanel } from "../components/skill-store/skill-store-panel";
 import { IntegrationsPanel } from "../components/integrations/integrations-panel";
@@ -2072,21 +2073,34 @@ function WorkspacePageInner() {
 
   // Open entry modal handler
   const handleOpenEntry = useCallback(
-    (objectName: string, entryId: string) => {
+    (objectName: string, entryId: string, relatedObjectId?: string) => {
       // People + Company entries swap the MAIN panel for an Attio-style
       // profile (mirroring dench-2025's base-object-vs-generic-object
       // pattern). All other objects keep the existing side-panel modal.
       // The parent tab points at the resolved workspace object so the
       // back-to-list affordance lands on the unified ObjectView.
-      const isPersonProfile = objectName === "people";
-      const isCompanyProfile = objectName === "company" || objectName === "companies";
-      if (isPersonProfile) {
+      //
+      // Routing precedence:
+      //   1. `relatedObjectId` (when provided by a relation chip) is the
+      //      authoritative signal — comparing against the seed CRM object
+      //      IDs avoids false positives where a custom user object happens
+      //      to be named "company" / "companies" / "people".
+      //   2. Fallback to raw `objectName` matching for direct nav (URL
+      //      hydration, sidebar Companies/People entries) where no
+      //      relation field id is available.
+      const isSeedPerson = relatedObjectId
+        ? isSeedPeopleObjectId(relatedObjectId)
+        : objectName === "people";
+      const isSeedCompany = relatedObjectId
+        ? isSeedCompanyObjectId(relatedObjectId)
+        : objectName === "company" || objectName === "companies";
+      if (isSeedPerson) {
         const node = resolveCrmObjectNode(tree, "people");
         openTabForNode(node);
         setActivePath(node.path);
         setContent({ kind: "crm-person", entryId });
         setEntryModal(null);
-      } else if (isCompanyProfile) {
+      } else if (isSeedCompany) {
         const node = resolveCrmObjectNode(tree, "company");
         openTabForNode(node);
         setActivePath(node.path);
@@ -3328,7 +3342,9 @@ function WorkspacePageInner() {
                         tree={tree}
                         searchFn={searchIndex}
                         onClose={handleCloseEntry}
-                        onNavigateEntry={(objName, eid) => handleOpenEntry(objName, eid)}
+                        onNavigateEntry={(objName, eid, relatedObjectId) =>
+                          handleOpenEntry(objName, eid, relatedObjectId)
+                        }
                         onNavigateObject={(objName) => {
                           handleCloseEntry();
                           handleNavigateToObject(objName);
@@ -3530,7 +3546,9 @@ function WorkspacePageInner() {
                           tree={tree}
                           searchFn={searchIndex}
                           onClose={handleCloseEntry}
-                          onNavigateEntry={(objName, eid) => handleOpenEntry(objName, eid)}
+                          onNavigateEntry={(objName, eid, relatedObjectId) =>
+                            handleOpenEntry(objName, eid, relatedObjectId)
+                          }
                           onNavigateObject={(objName) => {
                             handleCloseEntry();
                             handleNavigateToObject(objName);
@@ -3652,7 +3670,11 @@ function ContentRenderer({
   onRefreshObject: () => void;
   onRefreshTree: () => void;
   onNavigate: (href: string) => void;
-  onOpenEntry: (objectName: string, entryId: string) => void;
+  onOpenEntry: (
+    objectName: string,
+    entryId: string,
+    relatedObjectId?: string,
+  ) => void;
   activeEntryId?: string;
   searchFn: (query: string, limit?: number) => import("@/lib/search-index").SearchIndexItem[];
   onSelectCronJob: (jobId: string) => void;
@@ -3938,7 +3960,11 @@ function ObjectView({
   onNavigateToObject: (objectName: string) => void;
   onRefreshObject: () => void;
   onRefreshTree?: () => void;
-  onOpenEntry?: (objectName: string, entryId: string) => void;
+  onOpenEntry?: (
+    objectName: string,
+    entryId: string,
+    relatedObjectId?: string,
+  ) => void;
   activeEntryId?: string;
 }) {
   const searchParams = useSearchParams();

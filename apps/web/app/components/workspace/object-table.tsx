@@ -57,7 +57,17 @@ type ObjectTableProps = {
 	relationLabels?: Record<string, Record<string, string>>;
 	reverseRelations?: ReverseRelation[];
 	onNavigateToObject?: (objectName: string) => void;
-	onNavigateToEntry?: (objectName: string, entryId: string) => void;
+	/**
+	 * Open the entry's detail view. The optional `relatedObjectId` lets the
+	 * parent route precisely (e.g. CRM seed people/company → dedicated profile,
+	 * everything else → generic side-panel modal) instead of guessing from the
+	 * raw object name, which collides with custom user objects.
+	 */
+	onNavigateToEntry?: (
+		objectName: string,
+		entryId: string,
+		relatedObjectId?: string,
+	) => void;
 	onEntryClick?: (entryId: string) => void;
 	onRefresh?: () => void;
 	activeEntryId?: string;
@@ -229,7 +239,11 @@ function RelationCell({
 	value: unknown; field: Field;
 	relationLabels?: Record<string, Record<string, string>>;
 	onNavigateObject?: (objectName: string) => void;
-	onNavigateEntry?: (objectName: string, entryId: string) => void;
+	onNavigateEntry?: (
+		objectName: string,
+		entryId: string,
+		relatedObjectId?: string,
+	) => void;
 }) {
 	const fieldLabels = relationLabels?.[field.name];
 	const ids = value == null ? [] : parseRelationValue(String(value));
@@ -244,7 +258,11 @@ function RelationCell({
 						if (!onNavigateEntry && !onNavigateObject) {return;}
 						e.stopPropagation();
 						if (onNavigateEntry) {
-							onNavigateEntry(field.related_object_name, id);
+							onNavigateEntry(
+								field.related_object_name,
+								id,
+								field.related_object_id,
+							);
 							return;
 						}
 						onNavigateObject?.(field.related_object_name);
@@ -382,11 +400,16 @@ function TagsInput({
 	);
 }
 
-function ReverseRelationCell({ links, sourceObjectName, onNavigateObject, onNavigateEntry }: {
+function ReverseRelationCell({ links, sourceObjectName, sourceObjectId, onNavigateObject, onNavigateEntry }: {
 	links: Array<{ id: string; label: string }>;
 	sourceObjectName: string;
+	sourceObjectId?: string;
 	onNavigateObject?: (objectName: string) => void;
-	onNavigateEntry?: (objectName: string, entryId: string) => void;
+	onNavigateEntry?: (
+		objectName: string,
+		entryId: string,
+		relatedObjectId?: string,
+	) => void;
 }) {
 	if (!links || links.length === 0) {return <span style={{ color: "var(--color-text-muted)", opacity: 0.5 }}>--</span>;}
 	const display = links.slice(0, 5);
@@ -400,7 +423,7 @@ function ReverseRelationCell({ links, sourceObjectName, onNavigateObject, onNavi
 						if (!onNavigateEntry && !onNavigateObject) {return;}
 						e.stopPropagation();
 						if (onNavigateEntry) {
-							onNavigateEntry(sourceObjectName, link.id);
+							onNavigateEntry(sourceObjectName, link.id, sourceObjectId);
 							return;
 						}
 						onNavigateObject?.(sourceObjectName);
@@ -440,7 +463,11 @@ function EditableCell({
 	members?: Array<{ id: string; name: string }>;
 	relationLabels?: Record<string, Record<string, string>>;
 	onNavigateObject?: (objectName: string) => void;
-	onNavigateEntry?: (objectName: string, entryId: string) => void;
+	onNavigateEntry?: (
+		objectName: string,
+		entryId: string,
+		relatedObjectId?: string,
+	) => void;
 	onLocalValueChange?: (value: string) => void;
 	onSaved?: () => void;
 	showUrlFavicon?: boolean;
@@ -941,6 +968,7 @@ export function ObjectTable({
 						<ReverseRelationCell
 							links={links}
 							sourceObjectName={rr.sourceObjectName}
+							sourceObjectId={rr.sourceObjectId}
 							onNavigateObject={onNavigateToObject}
 							onNavigateEntry={onNavigateToEntry}
 						/>

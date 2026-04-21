@@ -64,7 +64,16 @@ export type EntryDetailPanelProps = {
   tree: TreeNode[];
   searchFn?: MentionSearchFn;
   onClose: () => void;
-  onNavigateEntry?: (objectName: string, entryId: string) => void;
+  /**
+   * Open the entry's detail view. The optional `relatedObjectId` lets the
+   * parent route precisely (CRM seed people/company → dedicated profile,
+   * everything else → generic side-panel modal).
+   */
+  onNavigateEntry?: (
+    objectName: string,
+    entryId: string,
+    relatedObjectId?: string,
+  ) => void;
   onNavigateObject?: (objectName: string) => void;
   onRefresh?: () => void;
   onNavigate?: (path: string) => void;
@@ -163,17 +172,28 @@ function RelationChips({
 }: {
   value: unknown; field: Field;
   relationLabels?: Record<string, Record<string, string>>;
-  onNavigateEntry?: (objectName: string, entryId: string) => void;
+  onNavigateEntry?: (
+    objectName: string,
+    entryId: string,
+    relatedObjectId?: string,
+  ) => void;
 }) {
   const fieldLabels = relationLabels?.[field.name];
-  const ids = parseRelationValue(String(value));
+  const ids = value == null ? [] : parseRelationValue(String(value));
   if (ids.length === 0) return <EmptyValue />;
   return (
     <span className="flex items-center gap-1 flex-wrap">
       {ids.map((id) => {
         const label = fieldLabels?.[id] ?? id;
         const handleClick = field.related_object_name && onNavigateEntry
-          ? (e: React.MouseEvent<HTMLButtonElement>) => { e.stopPropagation(); onNavigateEntry(field.related_object_name!, id); }
+          ? (e: React.MouseEvent<HTMLButtonElement>) => {
+              e.stopPropagation();
+              onNavigateEntry(
+                field.related_object_name!,
+                id,
+                field.related_object_id,
+              );
+            }
           : undefined;
         return (
           <button type="button" key={id} onClick={handleClick}
@@ -287,7 +307,11 @@ function FieldValue({
   value: unknown; field: Field;
   members?: Array<{ id: string; name: string }>;
   relationLabels?: Record<string, Record<string, string>>;
-  onNavigateEntry?: (objectName: string, entryId: string) => void;
+  onNavigateEntry?: (
+    objectName: string,
+    entryId: string,
+    relatedObjectId?: string,
+  ) => void;
 }) {
   if (value === null || value === undefined || value === "") return <EmptyValue />;
   switch (field.type) {
@@ -303,7 +327,14 @@ function FieldValue({
   }
 }
 
-function ReverseRelationSection({ relation, onNavigateEntry }: { relation: ReverseRelation; onNavigateEntry?: (objectName: string, entryId: string) => void }) {
+function ReverseRelationSection({ relation, onNavigateEntry }: {
+  relation: ReverseRelation;
+  onNavigateEntry?: (
+    objectName: string,
+    entryId: string,
+    relatedObjectId?: string,
+  ) => void;
+}) {
   const displayLinks = relation.links.slice(0, 10);
   const overflow = relation.links.length - displayLinks.length;
   return (
@@ -315,7 +346,7 @@ function ReverseRelationSection({ relation, onNavigateEntry }: { relation: Rever
       </label>
       <div className="flex items-center gap-1 flex-wrap text-sm min-h-[1.5rem]">
         {displayLinks.map((link) => (
-          <button type="button" key={link.id} onClick={() => onNavigateEntry?.(relation.sourceObjectName, link.id)}
+          <button type="button" key={link.id} onClick={() => onNavigateEntry?.(relation.sourceObjectName, link.id, relation.sourceObjectId)}
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium cursor-pointer hover:opacity-80"
             style={{ background: "rgba(192, 132, 252, 0.1)", color: "#c084fc", border: "1px solid rgba(192, 132, 252, 0.2)" }}
             title={`Open ${link.label} in ${displayObjectName(relation.sourceObjectName)}`}

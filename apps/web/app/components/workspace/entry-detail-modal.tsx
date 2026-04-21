@@ -63,8 +63,16 @@ type EntryDetailModalProps = {
   entryId: string;
   members?: Array<{ id: string; name: string; email: string; role: string }>;
   onClose: () => void;
-  /** Navigate to another entry (opens new modal). */
-  onNavigateEntry?: (objectName: string, entryId: string) => void;
+  /**
+   * Navigate to another entry. The optional `relatedObjectId` lets the
+   * parent route precisely (CRM seed people/company → dedicated profile,
+   * everything else → side-panel modal).
+   */
+  onNavigateEntry?: (
+    objectName: string,
+    entryId: string,
+    relatedObjectId?: string,
+  ) => void;
   /** Navigate to an object table view. */
   onNavigateObject?: (objectName: string) => void;
   /** Called after an edit or delete to refresh parent data. */
@@ -176,10 +184,14 @@ function RelationChips({
   value: unknown;
   field: Field;
   relationLabels?: Record<string, Record<string, string>>;
-  onNavigateEntry?: (objectName: string, entryId: string) => void;
+  onNavigateEntry?: (
+    objectName: string,
+    entryId: string,
+    relatedObjectId?: string,
+  ) => void;
 }) {
   const fieldLabels = relationLabels?.[field.name];
-  const ids = parseRelationValue(String(value));
+  const ids = value == null ? [] : parseRelationValue(String(value));
   if (ids.length === 0) {return <EmptyValue />;}
 
   return (
@@ -189,7 +201,11 @@ function RelationChips({
         const handleClick = field.related_object_name && onNavigateEntry
           ? (e: React.MouseEvent<HTMLButtonElement>) => {
             e.stopPropagation();
-            onNavigateEntry(field.related_object_name!, id);
+            onNavigateEntry(
+              field.related_object_name!,
+              id,
+              field.related_object_id,
+            );
           }
           : undefined;
         return (
@@ -347,7 +363,11 @@ function ReverseRelationSection({
   onNavigateEntry,
 }: {
   relation: ReverseRelation;
-  onNavigateEntry?: (objectName: string, entryId: string) => void;
+  onNavigateEntry?: (
+    objectName: string,
+    entryId: string,
+    relatedObjectId?: string,
+  ) => void;
 }) {
   const displayLinks = relation.links.slice(0, 10);
   const overflow = relation.links.length - displayLinks.length;
@@ -371,7 +391,7 @@ function ReverseRelationSection({
           <button
             type="button"
             key={link.id}
-            onClick={() => onNavigateEntry?.(relation.sourceObjectName, link.id)}
+            onClick={() => onNavigateEntry?.(relation.sourceObjectName, link.id, relation.sourceObjectId)}
             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer hover:opacity-80"
             style={{
               background: "rgba(192, 132, 252, 0.1)",
@@ -407,7 +427,11 @@ function FieldValue({
   field: Field;
   members?: Array<{ id: string; name: string }>;
   relationLabels?: Record<string, Record<string, string>>;
-  onNavigateEntry?: (objectName: string, entryId: string) => void;
+  onNavigateEntry?: (
+    objectName: string,
+    entryId: string,
+    relatedObjectId?: string,
+  ) => void;
 }) {
   if (value === null || value === undefined || value === "") {return <EmptyValue />;}
 

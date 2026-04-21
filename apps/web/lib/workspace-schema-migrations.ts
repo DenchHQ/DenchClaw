@@ -20,17 +20,20 @@ import {
   readObjectYaml,
   writeObjectYaml,
 } from "./workspace";
+import { SEED_OBJECT_IDS } from "./seed-object-ids";
 
 // ---------------------------------------------------------------------------
 // Object IDs (seed_*) — must stay stable so re-runs are idempotent.
+// Single source of truth lives in `./seed-object-ids` so client components
+// can compare relation `related_object_id`s without pulling in server deps.
 // ---------------------------------------------------------------------------
 
-const PEOPLE_OBJECT_ID = "seed_obj_people_00000000000000";
-const COMPANY_OBJECT_ID = "seed_obj_company_0000000000000";
-const EMAIL_THREAD_OBJECT_ID = "seed_obj_email_thread_000000000";
-const EMAIL_MESSAGE_OBJECT_ID = "seed_obj_email_message_00000000";
-const CALENDAR_EVENT_OBJECT_ID = "seed_obj_calendar_event_0000000";
-const INTERACTION_OBJECT_ID = "seed_obj_interaction_00000000000";
+const PEOPLE_OBJECT_ID = SEED_OBJECT_IDS.people;
+const COMPANY_OBJECT_ID = SEED_OBJECT_IDS.company;
+const EMAIL_THREAD_OBJECT_ID = SEED_OBJECT_IDS.email_thread;
+const EMAIL_MESSAGE_OBJECT_ID = SEED_OBJECT_IDS.email_message;
+const CALENDAR_EVENT_OBJECT_ID = SEED_OBJECT_IDS.calendar_event;
+const INTERACTION_OBJECT_ID = SEED_OBJECT_IDS.interaction;
 
 const SOURCE_ENUM_VALUES = '["Manual","Gmail","Calendar"]';
 const SOURCE_ENUM_COLORS = '["#94a3b8","#ef4444","#3b82f6"]';
