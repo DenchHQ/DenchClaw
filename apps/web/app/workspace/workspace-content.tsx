@@ -1185,13 +1185,15 @@ function WorkspacePageInner() {
   }, [refreshContext]);
 
   // Fetch chat sessions
+  // v3: keep file-scoped sessions too — the per-file session strip is gone, so
+  // every non-subagent chat lives in the unified history dropdown now.
   const fetchSessions = useCallback(async () => {
     setSessionsLoading(true);
     try {
       const res = await fetch("/api/web-sessions?includeAll=true");
       const data = await res.json();
-      const all: Array<WebSession & { filePath?: string }> = data.sessions ?? [];
-      setSessions(all.filter((s) => !s.filePath));
+      const all: WebSession[] = data.sessions ?? [];
+      setSessions(all);
     } catch {
       // ignore
     } finally {

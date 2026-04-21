@@ -620,7 +620,10 @@ export function ChatHistoryPopover({
 	const groups = useMemo(() => {
 		const rows: UnifiedRow[] = [];
 		for (const s of sessions) {
-			if (s.id.includes(":subagent:") || s.filePath) continue;
+			// Hide subagent (child) sessions — they render nested under their parent.
+			// Keep file-scoped sessions (those with `filePath`) in the unified history;
+			// in v3 they're regular top-level chats.
+			if (s.id.includes(":subagent:")) continue;
 			rows.push({ kind: "native", ts: s.updatedAt, session: s });
 		}
 		if (gatewaySessions) {
