@@ -30,6 +30,7 @@ import {
   stopManagedWebRuntime,
   waitForWebRuntime,
 } from "./web-runtime.js";
+import { kickoffSyncPoll, summarizeKickoffSyncPoll } from "./sync-poll.js";
 import {
   discoverWorkspaceDirs,
   syncManagedSkills,
@@ -487,6 +488,22 @@ export async function updateWebRuntimeCommand(
 
   cleanupManagedWebRuntimeBackup(stateDir);
 
+  // Web runtime is verified healthy AND we just replaced the standalone
+  // bundle, so any in-flight gateway sync-trigger 404s should now resolve.
+  // Fire one explicit kickoff to start the first Gmail/Calendar incremental
+  // immediately rather than waiting for the gateway plugin's next 5-min tick.
+  // Best-effort: a failure here just delays sync to the next gateway tick.
+  const kickoff = await kickoffSyncPoll({
+    stateDir,
+    port: selectedPort,
+  });
+  if (!opts.json) {
+    const summaryLine = summarizeKickoffSyncPoll(kickoff);
+    if (summaryLine) {
+      runtime.log(theme.muted(summaryLine));
+    }
+  }
+
   await promptAndOpenWebUi({
     webPort: selectedPort,
     json: opts.json,
@@ -668,6 +685,20 @@ export async function startWebRuntimeCommand(
   }
 
   cleanupManagedWebRuntimeBackup(stateDir);
+
+  // Same rationale as `updateWebRuntimeCommand`: kick off the first
+  // Gmail/Calendar sync as soon as the web runtime is verified healthy
+  // instead of waiting for the gateway plugin's 5-min interval to tick.
+  const kickoff = await kickoffSyncPoll({
+    stateDir,
+    port: selectedPort,
+  });
+  if (!opts.json) {
+    const summaryLine = summarizeKickoffSyncPoll(kickoff);
+    if (summaryLine) {
+      runtime.log(theme.muted(summaryLine));
+    }
+  }
 
   await promptAndOpenWebUi({
     webPort: selectedPort,

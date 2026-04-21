@@ -2,7 +2,7 @@
   "id": "dench-ai-gateway",
   "name": "Dench AI Gateway",
   "version": "1.0.0",
-  "description": "Registers Dench Cloud as an OpenClaw model provider with live gateway-backed model discovery.",
+  "description": "Registers Dench Cloud as an OpenClaw model provider with live gateway-backed model discovery, and arms the gateway-side Gmail/Calendar sync poll trigger.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -14,6 +14,26 @@
       "enabled": {
         "type": "boolean",
         "default": true
+      },
+      "syncTrigger": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Gateway-driven Gmail/Calendar sync poll trigger. Fires every intervalMs (default 5 minutes) by POSTing to the web app's /api/sync/poll-tick endpoint. Auto-disabled if no Dench Cloud API key is configured.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "intervalMs": {
+            "type": "number",
+            "default": 300000,
+            "description": "Polling interval in milliseconds. Defaults to 5 minutes. Minimum 1000ms."
+          },
+          "webBaseUrl": {
+            "type": "string",
+            "description": "Override the auto-detected web app URL (read from web-runtime/process.json). Useful for tests and non-default deployments."
+          }
+        }
       }
     },
     "required": []

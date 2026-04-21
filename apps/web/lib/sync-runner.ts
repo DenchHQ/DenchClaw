@@ -1,8 +1,14 @@
 /**
- * Sync orchestrator — drives Gmail + Calendar backfill once, then arms a
- * 5-minute incremental poll loop. The whole module is process-singleton:
- * exactly one backfill or poll runs at a time per Next.js process, no
- * matter how many SSE clients connect.
+ * Sync orchestrator — drives Gmail + Calendar backfill once. The
+ * incremental poll loop is no longer in-process: it's driven by the
+ * `dench-ai-gateway` plugin running inside the OpenClaw gateway daemon,
+ * which POSTs to `/api/sync/poll-tick` every ~5 minutes and we run
+ * `tickPoller()` here. The plugin survives Next.js restarts, so the
+ * cron stays alive across `denchclaw update`.
+ *
+ * The whole module is process-singleton: exactly one backfill or poll
+ * runs at a time per Next.js process, no matter how many SSE clients
+ * connect (or how many gateway-driven ticks land while one is in flight).
  *
  * Public surface:
  *
@@ -10,9 +16,14 @@
  *                       again while one is already in progress is a no-op
  *                       and just returns the in-flight handle).
  *   subscribeProgress(listener) → SSE-friendly progress event subscription.
- *   armIncrementalPoller()      → starts the 5-min interval (also called
- *                                 automatically once backfill completes).
- *   stop()                       → tears down the poller (used in tests).
+ *   tickPoller()                → run a single incremental poll cycle. Called
+ *                                 from the gateway-driven HTTP endpoint;
+ *                                 mutex-gated so overlap with backfill or
+ *                                 another tick is a no-op.
+ *   armIncrementalPoller()      → DEPRECATED. No-op shim retained so external
+ *                                 callers don't break; gateway plugin owns timing now.
+ *   stopIncrementalPoller()      → tears down the (now-unused) in-process
+ *                                  interval if a test or older code path armed it.
  */
 
 import { Mutex } from "async-mutex";
@@ -67,9 +78,10 @@ const listeners = new Set<ProgressListener>();
 let lastEvent: SyncProgressEvent | null = null;
 let backfillRunning = false;
 let backfillPromise: Promise<void> | null = null;
+// pollerHandle is no longer set in steady state — the gateway plugin owns
+// timing now. Kept as a defensive null so `stopIncrementalPoller()` can
+// still clean up if a test or older code path armed an in-process timer.
 let pollerHandle: ReturnType<typeof setInterval> | null = null;
-
-const DEFAULT_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Progress emission
@@ -333,8 +345,10 @@ async function runBackfillInner(options: StartBackfillOptions): Promise<void> {
       eventsProcessed: totalEvents,
     });
 
-    // Arm the poller for ongoing freshness.
-    armIncrementalPoller();
+    // No need to arm an in-process poller: the OpenClaw gateway's
+    // `dench-ai-gateway` plugin already posts to `/api/sync/poll-tick`
+    // on its own schedule. First gateway tick will catch up anything
+    // that landed between the backfill commit and now.
   } finally {
     release();
   }
@@ -344,15 +358,17 @@ async function runBackfillInner(options: StartBackfillOptions): Promise<void> {
 // Incremental poller
 // ---------------------------------------------------------------------------
 
-export function armIncrementalPoller(intervalMs?: number): void {
-  if (pollerHandle) {return;}
-  const cursors = readSyncCursors();
-  const period = intervalMs ?? cursors.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  pollerHandle = setInterval(() => {
-    void tickPoller().catch(() => {
-      // Errors swallowed; emit() inside tickPoller already surfaces them.
-    });
-  }, period);
+/**
+ * @deprecated The incremental poll loop is now driven by the
+ * `dench-ai-gateway` OpenClaw plugin (which posts to `/api/sync/poll-tick`
+ * from inside the long-lived gateway daemon). This function is retained as
+ * a no-op shim so older callers don't break; new callers should use
+ * `tickPoller()` directly if they need a one-shot run, or rely on the
+ * gateway-driven cron for ongoing polling. The `intervalMs` parameter is
+ * ignored.
+ */
+export function armIncrementalPoller(_intervalMs?: number): void {
+  // No-op: the gateway plugin owns timing now.
 }
 
 export function stopIncrementalPoller(): void {
@@ -362,7 +378,14 @@ export function stopIncrementalPoller(): void {
   }
 }
 
-async function tickPoller(): Promise<void> {
+/**
+ * Run a single incremental Gmail/Calendar poll cycle. Safe to call
+ * concurrently — the module mutex makes overlapping invocations no-ops.
+ *
+ * Called from `apps/web/app/api/sync/poll-tick/route.ts`, which is
+ * triggered by the gateway-side `dench-ai-gateway` plugin every ~5 min.
+ */
+export async function tickPoller(): Promise<void> {
   if (mutex.isLocked()) {return;}
   const release = await mutex.acquire();
   try {

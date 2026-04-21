@@ -22,26 +22,11 @@ export async function register() {
       console.error("[instrumentation] ensureLatestSchema failed:", err);
     }
 
-    // Resume the Gmail/Calendar incremental poll loop after process restart
-    // if the user has already completed onboarding. Cursors persisted in
-    // .denchclaw/sync-cursors.json mean no message is lost across restarts.
-    try {
-      const { isOnboardingComplete, readConnections, readSyncCursors } = await import(
-        "./lib/denchclaw-state"
-      );
-      if (isOnboardingComplete()) {
-        const connections = readConnections();
-        const cursors = readSyncCursors();
-        const hasGmailWatch = connections.gmail && cursors.gmail?.historyId;
-        const hasCalendarWatch = connections.calendar && cursors.calendar?.syncToken;
-        if (hasGmailWatch || hasCalendarWatch) {
-          const { armIncrementalPoller } = await import("./lib/sync-runner");
-          armIncrementalPoller();
-        }
-      }
-    } catch {
-      // Non-fatal — poller will be re-armed when the user completes a
-      // manual sync from the workspace.
-    }
+    // Note: the Gmail/Calendar incremental poll loop is no longer armed
+    // from inside the Next.js process. The OpenClaw gateway daemon's
+    // `dench-ai-gateway` plugin owns the timing now and POSTs to
+    // `/api/sync/poll-tick` every ~5 minutes. That process survives
+    // `denchclaw update` and web-runtime restarts, so the cron stays
+    // alive without depending on Next.js boot hooks.
   }
 }

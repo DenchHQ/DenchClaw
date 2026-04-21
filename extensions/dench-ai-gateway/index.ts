@@ -11,6 +11,7 @@ import {
   resolveDenchCloudModel,
   type DenchCloudCatalogModel,
 } from "./models.js";
+import { armSyncTrigger } from "./sync-trigger.js";
 export { buildDenchCloudConfigPatch } from "./config-patch.js";
 
 export const id = "dench-ai-gateway";
@@ -301,6 +302,12 @@ export default function register(api: any) {
   } as any);
 
   registerDenchIntegrationsBridge(api, gatewayUrl);
+
+  // Arm the gateway-driven Gmail/Calendar sync poll trigger. Lives here
+  // (not in the Next.js process) so the timer survives `denchclaw update`
+  // and web-runtime restarts. No-op when no Dench Cloud key is present
+  // or when `syncTrigger.enabled` is explicitly disabled in plugin config.
+  armSyncTrigger(api);
 
   api.registerService({
     id: "dench-ai-gateway",

@@ -1,12 +1,16 @@
 import { spawn, type StdioOptions } from "node:child_process";
 import {
+  closeSync,
   cpSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -45,6 +49,7 @@ import {
   resolveProfileStateDir,
   waitForWebRuntime,
 } from "./web-runtime.js";
+import { kickoffSyncPoll, summarizeKickoffSyncPoll } from "./sync-poll.js";
 import { seedWorkspaceFromAssets, type WorkspaceSeedResult } from "./workspace-seed.js";
 
 const DEFAULT_DENCHCLAW_PROFILE = "dench";
@@ -1071,19 +1076,48 @@ async function runOpenClawOrThrow(params: {
 /**
  * Runs an OpenClaw command attached to the current terminal.
  * Use this for interactive flows like `openclaw onboard`.
+ *
+ * Special handling for `openclaw onboard --install-daemon`: that subprocess
+ * frequently hangs after the user finishes the wizard (printing
+ * "Onboarding complete.") because its post-wizard daemon-install path
+ * calls slow external HTTPS endpoints (model catalog discovery, etc.) with
+ * no upstream flag to skip them. We can't tee stdout (the wizard is
+ * @clack/prompts and needs a real TTY for arrow-key navigation), so we
+ * use a SIDE-CHANNEL signal instead: watch the gateway log for the
+ * `[gateway] ready (` line that appears after the wizard restarts the
+ * daemon. Once seen, give onboard a grace period to exit naturally; if it
+ * doesn't, send SIGTERM, then SIGKILL. Treats post-marker termination as
+ * success since the wizard's user-visible work is done.
  */
 async function runOpenClawInteractiveOrThrow(params: {
   openclawCommand: string;
   args: string[];
   timeoutMs: number;
   errorMessage: string;
+  /**
+   * Optional: when set, watch this gateway.log file for the
+   * `[gateway] ready (` line and use it as the "wizard finished"
+   * signal. Bootstrap passes the profile state dir's logs/gateway.log
+   * here for the onboard call.
+   */
+  gatewayLogPath?: string;
+  /** Grace before SIGTERM after marker detection. Default 60s. */
+  markerGraceMs?: number;
+  /** Grace between SIGTERM and SIGKILL. Default 5s. */
+  sigtermGraceMs?: number;
 }): Promise<SpawnResult> {
-  const result = await runOpenClaw(
-    params.openclawCommand,
-    params.args,
-    params.timeoutMs,
-    "inherit",
-  );
+  // #region debug-e2e66e: H1/H2 — confirm onboard subprocess spawn + lifetime
+  const _dbgStart = Date.now();
+  fetch('http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e2e66e'},body:JSON.stringify({sessionId:'e2e66e',hypothesisId:'H1+H2',location:'bootstrap-external.ts:runOpenClawInteractiveOrThrow:start',message:'spawning interactive openclaw',data:{cmd:params.openclawCommand,args:params.args,timeoutMs:params.timeoutMs,gatewayLogPath:params.gatewayLogPath},timestamp:_dbgStart})}).catch(()=>{});
+  const _dbgPing = setInterval(() => {
+    fetch('http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e2e66e'},body:JSON.stringify({sessionId:'e2e66e',hypothesisId:'H1',location:'bootstrap-external.ts:runOpenClawInteractiveOrThrow:still-waiting',message:'still awaiting onboard exit',data:{elapsedMs:Date.now()-_dbgStart,argsTail:params.args.slice(-6)},timestamp:Date.now()})}).catch(()=>{});
+  }, 30_000);
+  // #endregion
+  const result = await runOpenClawInteractiveWithMarkerCutoff(params);
+  // #region debug-e2e66e: H1/H2 — onboard subprocess actually exited
+  clearInterval(_dbgPing);
+  fetch('http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e2e66e'},body:JSON.stringify({sessionId:'e2e66e',hypothesisId:'H1+H2',location:'bootstrap-external.ts:runOpenClawInteractiveOrThrow:exit',message:'interactive openclaw exited',data:{code:result.code,elapsedMs:Date.now()-_dbgStart},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
   if (result.code === 0) {
     return result;
   }
@@ -1092,6 +1126,170 @@ async function runOpenClawInteractiveOrThrow(params: {
   if (detail) parts.push(detail);
   else if (result.code != null) parts.push(`(exit code ${result.code})`);
   throw new Error(parts.join("\n"));
+}
+
+// 0 = SIGTERM the moment the marker fires. Runtime evidence (debug session
+// e2e66e, log entries 4 → 7 → 8) showed onboard exits within 24ms of SIGTERM
+// after the marker, so any non-zero grace is pure dead time bootstrap-side.
+// Caller can opt back into a grace period if they hit a reproducible case
+// where onboard needs more time to flush state after the marker.
+const ONBOARD_DEFAULT_MARKER_GRACE_MS = 0;
+const ONBOARD_DEFAULT_SIGTERM_GRACE_MS = 5_000;
+// Poll the gateway log roughly twice per second so the marker is detected
+// within ~500ms of being written. Keeps bootstrap snappy without melting CPU.
+const ONBOARD_GATEWAY_LOG_POLL_MS = 500;
+const ONBOARD_GATEWAY_READY_MARKER = "[gateway] ready (";
+
+/**
+ * Spawn `openclaw` with stdio inherited (so the @clack/prompts wizard
+ * keeps full TTY rendering + arrow-key input), but separately watch the
+ * gateway's log file for the post-wizard `[gateway] ready (` line. That
+ * line fires when openclaw onboard restarts the daemon as part of its
+ * post-prompt work — by then the user-visible wizard is done. Once we
+ * see it, we give onboard `markerGraceMs` to exit on its own; if it's
+ * still alive (the upstream hang we're working around), we send SIGTERM
+ * then SIGKILL and treat the result as success.
+ *
+ * If `gatewayLogPath` isn't supplied, this degrades to a plain spawn
+ * with no early-exit (same as before — used for daemonless / non-onboard
+ * interactive flows).
+ */
+async function runOpenClawInteractiveWithMarkerCutoff(params: {
+  openclawCommand: string;
+  args: string[];
+  timeoutMs: number;
+  gatewayLogPath?: string;
+  markerGraceMs?: number;
+  sigtermGraceMs?: number;
+}): Promise<SpawnResult> {
+  const markerGraceMs = params.markerGraceMs ?? ONBOARD_DEFAULT_MARKER_GRACE_MS;
+  const sigtermGraceMs = params.sigtermGraceMs ?? ONBOARD_DEFAULT_SIGTERM_GRACE_MS;
+  const gatewayLogPath = params.gatewayLogPath;
+
+  return await new Promise<SpawnResult>((resolve, reject) => {
+    const child = spawn(params.openclawCommand, params.args, {
+      stdio: "inherit",
+      ...platformSpawnOptions(),
+    });
+
+    let settled = false;
+    let markerSeen = false;
+    let killedAfterMarker = false;
+    let logWatcher: NodeJS.Timeout | null = null;
+    let postMarkerSigtermTimer: NodeJS.Timeout | null = null;
+    let postMarkerSigkillTimer: NodeJS.Timeout | null = null;
+
+    const outerTimer = setTimeout(() => {
+      if (settled) {return;}
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore — process may already be gone
+      }
+    }, params.timeoutMs);
+
+    function clearTimers(): void {
+      clearTimeout(outerTimer);
+      if (logWatcher) {clearInterval(logWatcher);}
+      if (postMarkerSigtermTimer) {clearTimeout(postMarkerSigtermTimer);}
+      if (postMarkerSigkillTimer) {clearTimeout(postMarkerSigkillTimer);}
+    }
+
+    // Side-channel marker watcher: tail the gateway log starting from its
+    // current size (so we only see lines emitted AFTER this onboard run).
+    if (gatewayLogPath) {
+      let initialSize = 0;
+      try {
+        if (existsSync(gatewayLogPath)) {
+          initialSize = statSync(gatewayLogPath).size;
+        }
+      } catch {
+        initialSize = 0;
+      }
+      let cursor = initialSize;
+      logWatcher = setInterval(() => {
+        if (markerSeen || settled) {return;}
+        try {
+          if (!existsSync(gatewayLogPath)) {return;}
+          const size = statSync(gatewayLogPath).size;
+          if (size <= cursor) {return;}
+          // Read only the new bytes.
+          const len = size - cursor;
+          const buf = Buffer.alloc(len);
+          const fd = openSync(gatewayLogPath, "r");
+          try {
+            readSync(fd, buf, 0, len, cursor);
+          } finally {
+            closeSync(fd);
+          }
+          cursor = size;
+          if (buf.toString("utf-8").includes(ONBOARD_GATEWAY_READY_MARKER)) {
+            markerSeen = true;
+            // #region debug-e2e66e: H4 — marker observed, arming graceful kill
+            fetch('http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e2e66e'},body:JSON.stringify({sessionId:'e2e66e',hypothesisId:'H4',location:'bootstrap-external.ts:marker-cutoff:marker-seen',message:'gateway-ready marker detected; arming kill',data:{markerGraceMs,sigtermGraceMs},timestamp:Date.now()})}).catch(()=>{});
+            // #endregion
+            const sendSigterm = (): void => {
+              if (settled || child.exitCode !== null) {return;}
+              killedAfterMarker = true;
+              // #region debug-e2e66e: H4 — sending SIGTERM to onboard
+              fetch('http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e2e66e'},body:JSON.stringify({sessionId:'e2e66e',hypothesisId:'H4',location:'bootstrap-external.ts:marker-cutoff:sigterm',message:'sending SIGTERM after marker grace',data:{markerGraceMs},timestamp:Date.now()})}).catch(()=>{});
+              // #endregion
+              try {
+                child.kill("SIGTERM");
+              } catch {
+                // ignore
+              }
+              postMarkerSigkillTimer = setTimeout(() => {
+                if (settled || child.exitCode !== null) {return;}
+                // #region debug-e2e66e: H4 — escalating to SIGKILL
+                fetch('http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e2e66e'},body:JSON.stringify({sessionId:'e2e66e',hypothesisId:'H4',location:'bootstrap-external.ts:marker-cutoff:sigkill',message:'escalating to SIGKILL',data:{},timestamp:Date.now()})}).catch(()=>{});
+                // #endregion
+                try {
+                  child.kill("SIGKILL");
+                } catch {
+                  // ignore
+                }
+              }, sigtermGraceMs);
+            };
+            if (markerGraceMs > 0) {
+              postMarkerSigtermTimer = setTimeout(sendSigterm, markerGraceMs);
+            } else {
+              sendSigterm();
+            }
+          }
+        } catch {
+          // Log file may be rotated/missing temporarily; just try again.
+        }
+      }, ONBOARD_GATEWAY_LOG_POLL_MS);
+    }
+
+    child.once("error", (error: Error) => {
+      if (settled) {return;}
+      settled = true;
+      clearTimers();
+      reject(error);
+    });
+
+    child.once("close", (code: number | null) => {
+      if (settled) {return;}
+      settled = true;
+      clearTimers();
+      // If we killed it AFTER the marker fired, treat as success — the
+      // wizard's user-visible work was already done. Bootstrap will run
+      // its own gateway probe + autofix immediately after, so any
+      // openclaw-side post-wizard verification we cut short is redundant.
+      const synthesizedCode = killedAfterMarker
+        ? 0
+        : typeof code === "number"
+          ? code
+          : 1;
+      resolve({
+        code: synthesizedCode,
+        stdout: "",
+        stderr: "",
+      });
+    });
+  });
 }
 
 /**
@@ -3295,9 +3493,15 @@ export async function bootstrapCommand(
   }
 
   onboardArgv.push("--accept-risk", "--skip-ui", "--skip-channels");
-  if (daemonless) {
-    onboardArgv.push("--skip-health");
-  }
+  // `openclaw onboard --install-daemon` runs an internal post-install health
+  // check that polls a bunch of external model-provider endpoints (Vercel AI
+  // Gateway, etc.). On slow networks (or when a provider endpoint times out)
+  // that probe can stall onboard for many minutes — long enough to exceed our
+  // 12-minute outer timeout and fail bootstrap entirely. We don't need it:
+  // the dench bootstrap does its own retry-aware gateway probe right after
+  // onboard returns (`probeGateway` at the top of the post-onboard block,
+  // followed by `attemptGatewayAutoFix` if needed). Skip it always.
+  onboardArgv.push("--skip-health");
 
   if (nonInteractive) {
     await runOpenClawOrThrow({
@@ -3312,9 +3516,19 @@ export async function bootstrapCommand(
       args: onboardArgv,
       timeoutMs: 12 * 60_000,
       errorMessage: "OpenClaw onboarding failed.",
+      // Watch the gateway log for the post-wizard `[gateway] ready (`
+      // line. When openclaw onboard restarts the daemon as part of its
+      // post-prompt work, we know the user is done with the wizard. If
+      // onboard then hangs on its own slow post-wizard verification
+      // (the recurring 5-10min stall), we send SIGTERM after a grace
+      // period and let denchclaw's own gateway probe + autofix continue.
+      gatewayLogPath: daemonless ? undefined : path.join(stateDir, "logs", "gateway.log"),
     });
   }
 
+  // #region debug-e2e66e: H3 — onboard returned, entering post-onboard sequence
+  fetch('http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e2e66e'},body:JSON.stringify({sessionId:'e2e66e',hypothesisId:'H3',location:'bootstrap-external.ts:post-onboard:enter',message:'onboard returned, starting post-onboard work',data:{},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
   const workspaceSeed = seedWorkspaceFromAssets({
     workspaceDir,
     packageRoot,
@@ -3390,6 +3604,10 @@ export async function bootstrapCommand(
     // daemon picks up plugin, model, and subagent changes that were written after
     // onboard started it.  No helper above triggers its own restart.
     postOnboardSpinner?.message("Restarting gateway…");
+    // #region debug-e2e66e: H3 — about to call openclaw gateway restart
+    const _dbgRestartStart = Date.now();
+    fetch('http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e2e66e'},body:JSON.stringify({sessionId:'e2e66e',hypothesisId:'H3',location:'bootstrap-external.ts:gateway-restart:start',message:'calling openclaw gateway restart',data:{},timestamp:_dbgRestartStart})}).catch(()=>{});
+    // #endregion
     try {
       await runOpenClawOrThrow({
         openclawCommand,
@@ -3397,7 +3615,13 @@ export async function bootstrapCommand(
         timeoutMs: 60_000,
         errorMessage: "Failed to restart gateway after config update.",
       });
-    } catch {
+      // #region debug-e2e66e: H3 — gateway restart returned
+      fetch('http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e2e66e'},body:JSON.stringify({sessionId:'e2e66e',hypothesisId:'H3',location:'bootstrap-external.ts:gateway-restart:done',message:'gateway restart returned ok',data:{elapsedMs:Date.now()-_dbgRestartStart},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+    } catch (err) {
+      // #region debug-e2e66e: H3 — gateway restart threw
+      fetch('http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e2e66e'},body:JSON.stringify({sessionId:'e2e66e',hypothesisId:'H3',location:'bootstrap-external.ts:gateway-restart:throw',message:'gateway restart threw (caught)',data:{elapsedMs:Date.now()-_dbgRestartStart,err:err instanceof Error?err.message:String(err)},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       // Gateway may not be running (e.g. onboard daemon install failed on this
       // platform).  The final readiness check below will catch this.
     }
@@ -3438,6 +3662,9 @@ export async function bootstrapCommand(
   const gatewayUrl = `ws://127.0.0.1:${gatewayPort}`;
   const preferredWebPort = parseOptionalPort(opts.webPort) ?? DEFAULT_WEB_APP_PORT;
   postOnboardSpinner?.message(`Starting web runtime on port ${preferredWebPort}…`);
+  // #region debug-e2e66e: H3 — about to install/start web runtime
+  fetch('http://127.0.0.1:7651/ingest/93e0c293-34f1-4a69-8fce-870fc1b93fcb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e2e66e'},body:JSON.stringify({sessionId:'e2e66e',hypothesisId:'H3',location:'bootstrap-external.ts:ensureManagedWebRuntime:start',message:'starting web runtime install',data:{port:preferredWebPort},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
   let webRuntimeStatus = await ensureManagedWebRuntime({
     stateDir,
     packageRoot,
@@ -3470,6 +3697,24 @@ export async function bootstrapCommand(
       ? "Post-onboard setup complete."
       : "Post-onboard setup complete (web runtime unhealthy).",
   );
+
+  // Web runtime is verified healthy at this point — fire one explicit
+  // Gmail/Calendar sync kickoff so the user doesn't have to wait for the
+  // gateway plugin's first 5-min interval. Best-effort: a failure here
+  // (no Dench Cloud key, transient network) just falls back to that
+  // gateway-driven interval. See `extensions/dench-ai-gateway/sync-trigger.ts`
+  // for why the plugin no longer fires its own immediate-on-arm tick.
+  if (webRuntimeStatus.ready && !opts.json) {
+    const kickoff = await kickoffSyncPoll({
+      stateDir,
+      port: preferredWebPort,
+    });
+    const kickoffSummary = summarizeKickoffSyncPoll(kickoff);
+    if (kickoffSummary) {
+      runtime.log(theme.muted(kickoffSummary));
+    }
+  }
+
   const webReachable = webRuntimeStatus.ready;
   const webUrl = `http://localhost:${preferredWebPort}`;
   const composioConfigured = denchCloudSelection.enabled
