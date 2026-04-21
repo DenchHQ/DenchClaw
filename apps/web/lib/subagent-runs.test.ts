@@ -31,6 +31,16 @@ vi.mock("node:child_process", () => ({
       cb(null, { stdout: "" });
     },
   ),
+  execFile: vi.fn(
+    (
+      _cmd: string,
+      _args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, result: { stdout: string }) => void,
+    ) => {
+      cb(null, { stdout: "" });
+    },
+  ),
 }));
 
 vi.mock("node:os", () => ({
@@ -158,6 +168,16 @@ describe("subagent runs", () => {
       exec: vi.fn(
         (
           _cmd: string,
+          _opts: unknown,
+          cb: (err: Error | null, result: { stdout: string }) => void,
+        ) => {
+          cb(null, { stdout: "" });
+        },
+      ),
+      execFile: vi.fn(
+        (
+          _cmd: string,
+          _args: string[],
           _opts: unknown,
           cb: (err: Error | null, result: { stdout: string }) => void,
         ) => {

@@ -126,14 +126,15 @@ function deriveTitleFromMessages(lines: string[]): string | null {
         text = parsed.content;
       } else if (Array.isArray(parsed.parts)) {
         // ai-sdk UIMessage shape — concat all text parts.
-        text = parsed.parts
-          .filter((p: unknown): p is { type: string; text: string } =>
+        type UITextPart = { type: string; text: string };
+        text = (parsed.parts as unknown[])
+          .filter((p): p is UITextPart =>
             typeof p === "object" &&
             p !== null &&
             (p as { type?: string }).type === "text" &&
             typeof (p as { text?: string }).text === "string",
           )
-          .map((p) => p.text)
+          .map((p: UITextPart) => p.text)
           .join(" ");
       }
       const cleaned = text

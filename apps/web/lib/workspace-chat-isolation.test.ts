@@ -40,6 +40,21 @@ vi.mock("node:child_process", () => ({
       cb(null, { stdout: "" });
     },
   ),
+  execFile: vi.fn(
+    (
+      _cmd: string,
+      _args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, result: { stdout: string }) => void,
+    ) => {
+      cb(null, { stdout: "" });
+    },
+  ),
+  spawn: vi.fn(() => ({
+    on: vi.fn(),
+    stdout: { on: vi.fn() },
+    stderr: { on: vi.fn() },
+  })),
 }));
 
 vi.mock("node:os", () => ({
@@ -122,6 +137,21 @@ describe("workspace-scoped chat session isolation", () => {
           cb(null, { stdout: "" });
         },
       ),
+      execFile: vi.fn(
+        (
+          _cmd: string,
+          _args: string[],
+          _opts: unknown,
+          cb: (err: Error | null, result: { stdout: string }) => void,
+        ) => {
+          cb(null, { stdout: "" });
+        },
+      ),
+      spawn: vi.fn(() => ({
+        on: vi.fn(),
+        stdout: { on: vi.fn() },
+        stderr: { on: vi.fn() },
+      })),
     }));
     vi.mock("node:os", () => ({
       homedir: vi.fn(() => "/home/testuser"),
