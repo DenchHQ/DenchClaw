@@ -1392,6 +1392,9 @@ function WorkspacePageInner() {
     async (node: TreeNode) => {
       setActivePath(node.path);
       setContent({ kind: "loading" });
+      // Any navigation into a file/object/folder replaces the right-panel
+      // view, so a stale entry-detail-panel must not float on top of it.
+      setEntryModal(null);
 
       try {
         if (node.type === "object") {
@@ -1592,6 +1595,7 @@ function WorkspacePageInner() {
       openTabForNode({ path: config.path, name: config.name, type: "folder" }, { preview: false });
       setActivePath(config.path);
       setContent({ kind: config.kind });
+      setEntryModal(null);
     },
     [openTabForNode, tree, loadContent, ensureRightPanelOpenWide],
   );
@@ -1639,6 +1643,7 @@ function WorkspacePageInner() {
           openTabForNode(node);
           setActivePath(node.path);
           setContent({ kind: "directory", node: { name: node.name, path: node.path, type: "folder" } });
+          setEntryModal(null);
           return;
         }
       }
@@ -1663,6 +1668,7 @@ function WorkspacePageInner() {
           openTabForNode(node);
           setActivePath(node.path);
           setContent({ kind: "cron-job", jobId, job });
+          setEntryModal(null);
           return;
         }
       }
@@ -1671,6 +1677,7 @@ function WorkspacePageInner() {
         openTabForNode(node);
         setActivePath(node.path);
         setContent({ kind: "cron-dashboard" });
+        setEntryModal(null);
         return;
       }
       if (node.path === "~skills") {
@@ -1711,6 +1718,9 @@ function WorkspacePageInner() {
     if (tab.path) {
       const node = resolveNode(tree, tab.path);
       setActivePath(tab.path);
+      // Activating a non-chat tab swaps the right-panel view; close any
+      // entry-detail panel that was open against the previously-active tab.
+      setEntryModal(null);
       if (node) {
         setContent({ kind: "loading" });
         void loadContent(node);
@@ -1812,6 +1822,7 @@ function WorkspacePageInner() {
       setContent({ kind: "none" });
       setActiveSessionId(null);
       setActiveSubagentKey(null);
+      setEntryModal(null);
       return openTab(closed, createBlankChatTab());
     });
   }, []);
@@ -1996,6 +2007,7 @@ function WorkspacePageInner() {
         openTabForNode(node);
         setActivePath(itemPath);
         setContent({ kind: "directory", node: { name: item.name, path: itemPath, type: "folder" } });
+        setEntryModal(null);
       } else {
         if (browseDir != null) {
           const parentOfFile = item.path.split("/").slice(0, -1).join("/") || "/";
@@ -2034,6 +2046,7 @@ function WorkspacePageInner() {
       activeSessionId,
       activeSubagentKey,
       fileChatSessionId: null,
+      entryModal,
       browseDir,
       showHidden,
       previewPath: null,
@@ -2054,7 +2067,7 @@ function WorkspacePageInner() {
       router.push(url, { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes searchParams to avoid infinite loop; hydrationPhase is a ref gate
-  }, [activePath, activeSessionId, activeSubagentKey, browseDir, showHidden, router, cronView, cronCalMode, cronDate, cronRunFilter, cronRun]);
+  }, [activePath, activeSessionId, activeSubagentKey, entryModal, browseDir, showHidden, router, cronView, cronCalMode, cronDate, cronRunFilter, cronRun]);
 
   // Terminal URL sync — independent of workspace hydration so it works app-wide.
   useEffect(() => {

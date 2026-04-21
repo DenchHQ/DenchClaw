@@ -16,6 +16,7 @@ function defaultState(overrides: Partial<WorkspaceSyncState> = {}): WorkspaceSyn
     activeSessionId: null,
     activeSubagentKey: null,
     fileChatSessionId: null,
+    entryModal: null,
     browseDir: null,
     showHidden: false,
     previewPath: null,
@@ -137,17 +138,42 @@ describe("buildWorkspaceSyncParams core behavior", () => {
     expect(params.has("chat")).toBe(false);
   });
 
-  it("preserves entry param from current URL when path is set (entry modal is independent)", () => {
+  it("includes entry param when entryModal state is set alongside an active path", () => {
     const params = buildWorkspaceSyncParams(
-      defaultState({ activePath: "leads" }),
-      new URLSearchParams("entry=leads:abc"),
+      defaultState({
+        activePath: "leads",
+        entryModal: { objectName: "leads", entryId: "abc" },
+      }),
+      new URLSearchParams(),
     );
     expect(params.get("entry")).toBe("leads:abc");
   });
 
+  it("strips a stale entry param from the URL when entryModal is null (modal closed by navigation)", () => {
+    const params = buildWorkspaceSyncParams(
+      defaultState({ activePath: "leads" }),
+      new URLSearchParams("entry=leads:abc"),
+    );
+    expect(params.has("entry")).toBe(false);
+  });
+
+  it("replaces a stale entry param when navigating to a different entry modal", () => {
+    const params = buildWorkspaceSyncParams(
+      defaultState({
+        activePath: "leads",
+        entryModal: { objectName: "leads", entryId: "new-id" },
+      }),
+      new URLSearchParams("entry=leads:old-id"),
+    );
+    expect(params.get("entry")).toBe("leads:new-id");
+  });
+
   it("does not carry entry param when in chat mode (entry only meaningful with path)", () => {
     const params = buildWorkspaceSyncParams(
-      defaultState({ activeSessionId: "sess-1" }),
+      defaultState({
+        activeSessionId: "sess-1",
+        entryModal: { objectName: "leads", entryId: "abc" },
+      }),
       new URLSearchParams("entry=leads:abc"),
     );
     expect(params.has("entry")).toBe(false);

@@ -215,6 +215,13 @@ export interface WorkspaceSyncState {
   activeSessionId: string | null;
   activeSubagentKey: string | null;
   fileChatSessionId: string | null;
+  /**
+   * The entry currently shown in the side-panel modal (or `null` when no
+   * modal is open). Drives the `?entry=<object>:<id>` URL param so the
+   * modal closes whenever app state clears it (e.g. on navigation), rather
+   * than being passively preserved from the previous URL.
+   */
+  entryModal: { objectName: string; entryId: string } | null;
   browseDir: string | null;
   showHidden: boolean;
   previewPath: string | null;
@@ -230,8 +237,11 @@ export interface WorkspaceSyncState {
  * Build the URL params that the workspace URL sync effect should push.
  *
  * Pure function: takes app state + the current URL params (for preserving
- * object-view and entry params managed by other effects) and returns the
- * complete URLSearchParams to write.
+ * object-view params managed by ObjectView's own effect) and returns the
+ * complete URLSearchParams to write. The `entry` param is driven by
+ * `state.entryModal`, not by the previous URL — that way navigating away
+ * from an open entry modal removes the param and the modal stays closed
+ * on refresh.
  */
 export function buildWorkspaceSyncParams(
   state: WorkspaceSyncState,
@@ -241,8 +251,12 @@ export function buildWorkspaceSyncParams(
 
   if (state.activePath) {
     params.set("path", state.activePath);
-    const entry = currentParams.get("entry");
-    if (entry) params.set("entry", entry);
+    if (state.entryModal) {
+      params.set(
+        "entry",
+        `${state.entryModal.objectName}:${state.entryModal.entryId}`,
+      );
+    }
     if (state.fileChatSessionId) params.set("fileChat", state.fileChatSessionId);
 
     if (state.activePath === "~cron") {
