@@ -13,8 +13,8 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { confirm, isCancel, select, spinner, text } from "@clack/prompts";
-import json5 from "json5";
 import gradient from "gradient-string";
+import json5 from "json5";
 import { isDaemonlessMode } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -53,6 +53,9 @@ const MAX_PORT_SCAN_ATTEMPTS = 100;
 const DEFAULT_BOOTSTRAP_ROLLOUT_STAGE = "default";
 const DEFAULT_GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
 const REQUIRED_TOOLS_PROFILE = "full";
+const DEFAULT_EXEC_SECURITY = "full";
+const DEFAULT_EXEC_ASK = "off";
+const HOST_EXEC_APPROVALS_FILENAME = "exec-approvals.json";
 const OPENCLAW_CLI_CHECK_CACHE_TTL_MS = 5 * 60_000;
 const OPENCLAW_UPDATE_PROMPT_SUPPRESS_AFTER_INSTALL_MS = 5 * 60_000;
 const OPENCLAW_CLI_CHECK_CACHE_FILE = "openclaw-cli-check.json";
@@ -435,7 +438,9 @@ function normalizeVersionOutput(raw: string | undefined): string | undefined {
   return first && first.length > 0 ? first : undefined;
 }
 
-function parseOpenClawCalendarVersion(raw: string | undefined): [number, number, number] | undefined {
+function parseOpenClawCalendarVersion(
+  raw: string | undefined,
+): [number, number, number] | undefined {
   const match = raw?.match(/\b(\d{4})\.(\d+)\.(\d+)\b/u);
   if (!match) {
     return undefined;
@@ -544,24 +549,28 @@ function readBundledPluginVersion(pluginDir: string): string | undefined {
 }
 
 function readConfiguredPluginAllowlist(stateDir: string): string[] {
-  const raw = readBootstrapConfig(stateDir) as {
-    plugins?: {
-      allow?: unknown;
-    };
-  } | undefined;
+  const raw = readBootstrapConfig(stateDir) as
+    | {
+        plugins?: {
+          allow?: unknown;
+        };
+      }
+    | undefined;
   return Array.isArray(raw?.plugins?.allow)
     ? raw.plugins.allow.filter((value): value is string => typeof value === "string")
     : [];
 }
 
 function readConfiguredPluginLoadPaths(stateDir: string): string[] {
-  const raw = readBootstrapConfig(stateDir) as {
-    plugins?: {
-      load?: {
-        paths?: unknown;
-      };
-    };
-  } | undefined;
+  const raw = readBootstrapConfig(stateDir) as
+    | {
+        plugins?: {
+          load?: {
+            paths?: unknown;
+          };
+        };
+      }
+    | undefined;
   return Array.isArray(raw?.plugins?.load?.paths)
     ? raw.plugins.load.paths.filter((value): value is string => typeof value === "string")
     : [];
@@ -580,14 +589,7 @@ async function setOpenClawConfigJson(params: {
 }): Promise<void> {
   await runOpenClawOrThrow({
     openclawCommand: params.openclawCommand,
-    args: [
-      "--profile",
-      params.profile,
-      "config",
-      "set",
-      params.key,
-      JSON.stringify(params.value),
-    ],
+    args: ["--profile", params.profile, "config", "set", params.key, JSON.stringify(params.value)],
     timeoutMs: 30_000,
     errorMessage: params.errorMessage,
   });
@@ -608,7 +610,9 @@ function readDenchIntegrationsMetadata(stateDir: string): Record<string, unknown
 
 type ElevenLabsTtsConfigShape = "providers" | "flat";
 
-function readTtsElevenLabsConfig(tts: Record<string, unknown>): Record<string, unknown> | undefined {
+function readTtsElevenLabsConfig(
+  tts: Record<string, unknown>,
+): Record<string, unknown> | undefined {
   return asRecord(tts.elevenlabs) ?? asRecord(asRecord(tts.providers)?.elevenlabs);
 }
 
@@ -683,10 +687,7 @@ function disableDenchElevenLabsOverride(
     ) {
       delete elevenlabs.baseUrl;
     }
-    if (
-      typeof elevenlabs.apiKey === "string" &&
-      (!apiKey || elevenlabs.apiKey === apiKey)
-    ) {
+    if (typeof elevenlabs.apiKey === "string" && (!apiKey || elevenlabs.apiKey === apiKey)) {
       delete elevenlabs.apiKey;
     }
     if (Object.keys(elevenlabs).length === 0) {
@@ -723,7 +724,7 @@ function applyDenchManagedIntegrationDefaults(params: {
 
   const tools = { ...(asRecord(nextConfig.tools) ?? {}) };
   const deny = Array.isArray(tools.deny)
-    ? (tools.deny.filter((value): value is string => typeof value === "string"))
+    ? tools.deny.filter((value): value is string => typeof value === "string")
     : [];
   const web = { ...(asRecord(tools.web) ?? {}) };
   const search = { ...(asRecord(web.search) ?? {}) };
@@ -799,12 +800,8 @@ async function syncBundledPlugins(params: {
     };
     const currentAllow = readConfiguredPluginAllowlist(params.stateDir);
     const currentLoadPaths = readConfiguredPluginLoadPaths(params.stateDir);
-    const nextAllow = currentAllow.filter(
-      (value) => value !== "dench-cloud-provider",
-    );
-    const nextLoadPaths = currentLoadPaths.filter(
-      (value) => !isLegacyDenchCloudPluginPath(value),
-    );
+    const nextAllow = currentAllow.filter((value) => value !== "dench-cloud-provider");
+    const nextLoadPaths = currentLoadPaths.filter((value) => !isLegacyDenchCloudPluginPath(value));
     const legacyPluginDir = path.join(params.stateDir, "extensions", "dench-cloud-provider");
     const hadLegacyEntry = entries["dench-cloud-provider"] !== undefined;
     const hadLegacyInstall = installs["dench-cloud-provider"] !== undefined;
@@ -947,12 +944,12 @@ async function ensureDefaultWorkspacePath(
 
 /**
  * Stage all required pre-onboard config directly into `stateDir/openclaw.json`
- * without going through the OpenClaw CLI.  On a fresh install the "dench"
- * profile doesn't exist yet (it's created by `openclaw onboard`), so any
- * `openclaw config set` call fails.  Writing the file directly sidesteps
- * this while still ensuring the config is in place before onboard starts
- * the daemon.  The CLI-based re-application happens post-onboard once the
- * profile is live.
+ * and `stateDir/exec-approvals.json` without going through the OpenClaw CLI.
+ * On a fresh install the "dench" profile doesn't exist yet (it's created by
+ * `openclaw onboard`), so any `openclaw config set` call fails. Writing the
+ * files directly sidesteps this while still ensuring the config is in place
+ * before onboard starts the daemon. The CLI-based re-application happens
+ * post-onboard once the profile is live.
  */
 function stagePreOnboardConfig(
   stateDir: string,
@@ -977,8 +974,8 @@ function stagePreOnboardConfig(
 
   const tools = { ...(asRecord(raw.tools) ?? {}) };
   const exec = { ...(asRecord(tools.exec) ?? {}) };
-  exec.security = "full";
-  exec.ask = "off";
+  exec.security = DEFAULT_EXEC_SECURITY;
+  exec.ask = DEFAULT_EXEC_ASK;
   tools.exec = exec;
   const elevated = { ...(asRecord(tools.elevated) ?? {}) };
   elevated.enabled = true;
@@ -996,9 +993,30 @@ function stagePreOnboardConfig(
   defaults.elevatedDefault = "on";
 
   mkdirSync(stateDir, { recursive: true });
+  writeFileSync(path.join(stateDir, "openclaw.json"), `${JSON.stringify(raw, null, 2)}\n`);
+  ensureHostExecApprovalDefaults(stateDir);
+}
+
+/**
+ * Recent OpenClaw builds enforce exec approvals from a host-side policy file
+ * in addition to `tools.exec` inside openclaw.json. Keep both layers aligned
+ * so bootstrap never leaves web chat waiting on a host approval prompt.
+ */
+function ensureHostExecApprovalDefaults(stateDir: string): void {
+  const raw = readHostExecApprovalsConfig(stateDir) ?? {};
+  const defaults = { ...(asRecord(raw.defaults) ?? {}) };
+  defaults.security = DEFAULT_EXEC_SECURITY;
+  defaults.ask = DEFAULT_EXEC_ASK;
+  const next = {
+    ...raw,
+    version: toFiniteNumber(raw.version) ?? 1,
+    defaults,
+  };
+
+  mkdirSync(stateDir, { recursive: true });
   writeFileSync(
-    path.join(stateDir, "openclaw.json"),
-    `${JSON.stringify(raw, null, 2)}\n`,
+    path.join(stateDir, HOST_EXEC_APPROVALS_FILENAME),
+    `${JSON.stringify(next, null, 2)}\n`,
   );
 }
 
@@ -1017,8 +1035,8 @@ async function ensureAgentDefaults(openclawCommand: string, profile: string): Pr
     ["agents.defaults.subagents.archiveAfterMinutes", "180"],
     ["agents.defaults.subagents.runTimeoutSeconds", "0"],
     ["tools.subagents.tools.deny", "[]"],
-    ["tools.exec.security", "full"],
-    ["tools.exec.ask", "off"],
+    ["tools.exec.security", DEFAULT_EXEC_SECURITY],
+    ["tools.exec.ask", DEFAULT_EXEC_ASK],
     ["tools.elevated.enabled", "true"],
     ["tools.elevated.allowFrom.webchat", '["*"]'],
     ["agents.defaults.elevatedDefault", "on"],
@@ -1292,12 +1310,12 @@ function selectBootstrapDevicePairingRequest(pending: DeviceListEntry[]): {
     .filter((entry) => {
       const roles = resolveDeviceListEntryRoles(entry);
       const platformMatches = !entry.platform || entry.platform === process.platform;
-      return platformMatches && roles.includes("operator") && hasBootstrapDevicePairingScopes(entry);
+      return (
+        platformMatches && roles.includes("operator") && hasBootstrapDevicePairingScopes(entry)
+      );
     })
     .map((entry) => ({ entry, score: scoreBootstrapDevicePairingRequest(entry) }))
-    .sort(
-      (a, b) => b.score - a.score || (b.entry.createdAtMs ?? 0) - (a.entry.createdAtMs ?? 0),
-    );
+    .sort((a, b) => b.score - a.score || (b.entry.createdAtMs ?? 0) - (a.entry.createdAtMs ?? 0));
   if (candidates.length === 0) {
     return { status: "none", detail: "no pending local operator pairing request found" };
   }
@@ -1960,13 +1978,7 @@ async function attemptGatewayAutoFix(params: {
     },
     {
       name: "openclaw gateway install --force",
-      args: [
-        "--profile",
-        params.profile,
-        "gateway",
-        "install",
-        "--force",
-      ],
+      args: ["--profile", params.profile, "gateway", "install", "--force"],
       timeoutMs: 2 * 60_000,
     },
     {
@@ -2118,6 +2130,18 @@ function readBootstrapConfig(stateDir: string): Record<string, unknown> | undefi
   return undefined;
 }
 
+function readHostExecApprovalsConfig(stateDir: string): Record<string, unknown> | undefined {
+  const approvalsPath = path.join(stateDir, HOST_EXEC_APPROVALS_FILENAME);
+  if (!existsSync(approvalsPath)) {
+    return undefined;
+  }
+  try {
+    return asRecord(json5.parse(readFileSync(approvalsPath, "utf-8")));
+  } catch {
+    return undefined;
+  }
+}
+
 function hasConfiguredComposioServer(_stateDir: string): boolean {
   return true;
 }
@@ -2164,9 +2188,11 @@ function writeAuthProfileKey(stateDir: string, apiKey: string): void {
     if (existsSync(authPath)) {
       raw = json5.parse(readFileSync(authPath, "utf-8"));
     }
-  } catch { /* fresh file */ }
+  } catch {
+    /* fresh file */
+  }
 
-  const profiles = ((raw.profiles ?? {}) as Record<string, unknown>);
+  const profiles = (raw.profiles ?? {}) as Record<string, unknown>;
   profiles["dench-cloud:default"] = {
     type: "api_key",
     provider: "dench-cloud",
@@ -2188,11 +2214,13 @@ export function checkAgentAuth(
   if (!provider) {
     return { ok: false, detail: "No model provider configured." };
   }
-  const rawConfig = readBootstrapConfig(stateDir) as {
-    models?: {
-      providers?: Record<string, unknown>;
-    };
-  } | undefined;
+  const rawConfig = readBootstrapConfig(stateDir) as
+    | {
+        models?: {
+          providers?: Record<string, unknown>;
+        };
+      }
+    | undefined;
   const customProvider = rawConfig?.models?.providers?.[provider];
   if (customProvider && typeof customProvider === "object") {
     const apiKey = (customProvider as Record<string, unknown>).apiKey;
@@ -2455,9 +2483,9 @@ function logBootstrapChecklist(diagnostics: BootstrapDiagnostics, runtime: Runti
 function isExplicitDenchCloudRequest(opts: BootstrapOptions): boolean {
   return Boolean(
     opts.denchCloud ||
-      opts.denchCloudApiKey?.trim() ||
-      opts.denchCloudModel?.trim() ||
-      opts.denchGatewayUrl?.trim(),
+    opts.denchCloudApiKey?.trim() ||
+    opts.denchCloudModel?.trim() ||
+    opts.denchGatewayUrl?.trim(),
   );
 }
 
@@ -2569,9 +2597,7 @@ function renderDenchCloudRecommendationBanner(): string {
   ].join(dot);
 
   const check = rich ? theme.success("✓") : "✓";
-  const cta = rich
-    ? theme.success("Recommended for most users")
-    : "Recommended for most users";
+  const cta = rich ? theme.success("Recommended for most users") : "Recommended for most users";
 
   return [
     "",
@@ -2617,14 +2643,20 @@ function preStageDenchCloudConfig(params: {
     nextConfig.models = models;
 
     const tools = { ...asRecord(nextConfig.tools) };
-    tools.alsoAllow = mergeAllowedTools(nextConfig.tools, (configPatch as Record<string, unknown>).tools);
+    tools.alsoAllow = mergeAllowedTools(
+      nextConfig.tools,
+      (configPatch as Record<string, unknown>).tools,
+    );
     delete tools.allow;
     nextConfig.tools = tools;
 
     if (params.selectedModel) {
       const agents = { ...asRecord(nextConfig.agents) };
       const defaults = { ...asRecord(agents.defaults) };
-      defaults.model = { ...asRecord(defaults.model), primary: `dench-cloud/${params.selectedModel}` };
+      defaults.model = {
+        ...asRecord(defaults.model),
+        primary: `dench-cloud/${params.selectedModel}`,
+      };
       agents.defaults = defaults;
       nextConfig.agents = agents;
     }
@@ -2680,7 +2712,10 @@ function rewriteDenchCloudTtsConfigFile(params: {
   elevenlabs.apiKey = params.apiKey;
   messages.tts = tts;
   nextConfig.messages = messages;
-  writeFileSync(path.join(params.stateDir, "openclaw.json"), `${JSON.stringify(nextConfig, null, 2)}\n`);
+  writeFileSync(
+    path.join(params.stateDir, "openclaw.json"),
+    `${JSON.stringify(nextConfig, null, 2)}\n`,
+  );
 }
 
 function isExpectedTtsShapeValidationError(
@@ -2725,9 +2760,10 @@ async function applyDenchCloudTtsConfig(params: {
       openclawCommand: params.openclawCommand,
       profile: params.profile,
       key: shape === "providers" ? "messages.tts.providers.elevenlabs" : "messages.tts.elevenlabs",
-      value: shape === "providers"
-        ? asRecord(asRecord(ttsConfig.providers)?.elevenlabs)
-        : asRecord(ttsConfig.elevenlabs),
+      value:
+        shape === "providers"
+          ? asRecord(asRecord(ttsConfig.providers)?.elevenlabs)
+          : asRecord(ttsConfig.elevenlabs),
       errorMessage: "Failed to configure ElevenLabs TTS via Dench Cloud gateway.",
     });
   };
@@ -2755,13 +2791,15 @@ async function applyDenchCloudBootstrapConfig(params: {
   selectedModel: string;
   openClawVersion?: string;
 }): Promise<ElevenLabsTtsConfigShape> {
-  const raw = readBootstrapConfig(params.stateDir) as {
-    agents?: {
-      defaults?: {
-        models?: unknown;
-      };
-    };
-  } | undefined;
+  const raw = readBootstrapConfig(params.stateDir) as
+    | {
+        agents?: {
+          defaults?: {
+            models?: unknown;
+          };
+        };
+      }
+    | undefined;
   const existingAgentModels =
     raw?.agents?.defaults?.models && typeof raw.agents.defaults.models === "object"
       ? (raw.agents.defaults.models as Record<string, unknown>)
@@ -2902,9 +2940,11 @@ async function resolveDenchCloudBootstrapSelection(params: {
   const wantsDenchCloud = explicitRequest
     ? true
     : await confirm({
-      message: stylePromptMessage("Continue with Dench Cloud? Recommended. API key: dench.com/api"),
-      initialValue: existingDenchConfigured || !currentProvider,
-    });
+        message: stylePromptMessage(
+          "Continue with Dench Cloud? Recommended. API key: dench.com/api",
+        ),
+        initialValue: existingDenchConfigured || !currentProvider,
+      });
   if (isCancel(wantsDenchCloud) || !wantsDenchCloud) {
     return { enabled: false };
   }
@@ -2955,10 +2995,16 @@ async function resolveDenchCloudBootstrapSelection(params: {
       catalogSpinner?.stop("Models loaded.");
     }
 
-    const explicitModel = params.opts.denchCloudModel?.trim() || process.env.DENCH_CLOUD_MODEL?.trim();
-    const preselected = resolveDenchCloudModel(catalog.models, explicitModel || existing.selectedModel);
+    const explicitModel =
+      params.opts.denchCloudModel?.trim() || process.env.DENCH_CLOUD_MODEL?.trim();
+    const preselected = resolveDenchCloudModel(
+      catalog.models,
+      explicitModel || existing.selectedModel,
+    );
     if (!preselected && explicitModel) {
-      params.runtime.log(theme.warn(`Configured Dench Cloud model "${explicitModel}" is unavailable.`));
+      params.runtime.log(
+        theme.warn(`Configured Dench Cloud model "${explicitModel}" is unavailable.`),
+      );
     }
     const selection = await promptForDenchCloudModel({
       models: catalog.models,
@@ -2979,9 +3025,7 @@ async function resolveDenchCloudBootstrapSelection(params: {
       verifySpinner?.stop("Dench Cloud ready.");
     } catch (error) {
       verifySpinner?.stop("Verification failed.");
-      params.runtime.log(
-        theme.warn(error instanceof Error ? error.message : String(error)),
-      );
+      params.runtime.log(theme.warn(error instanceof Error ? error.message : String(error)));
       const retry = await confirm({
         message: stylePromptMessage("Re-enter your Dench Cloud API key?"),
         initialValue: true,
@@ -3192,11 +3236,11 @@ export async function bootstrapCommand(
       sourceDirName: "posthog-analytics",
       ...(process.env.POSTHOG_KEY
         ? {
-          enabled: true,
-          config: {
-            apiKey: process.env.POSTHOG_KEY,
-          },
-        }
+            enabled: true,
+            config: {
+              apiKey: process.env.POSTHOG_KEY,
+            },
+          }
         : {}),
     },
     {
@@ -3220,17 +3264,13 @@ export async function bootstrapCommand(
       pluginId: "apollo-enrichment",
       sourceDirName: "apollo-enrichment",
       enabled: denchCloudSelection.enabled,
-      ...(denchCloudSelection.enabled
-        ? { config: { enabled: true } }
-        : {}),
+      ...(denchCloudSelection.enabled ? { config: { enabled: true } } : {}),
     },
     {
       pluginId: "exa-search",
       sourceDirName: "exa-search",
       enabled: denchCloudSelection.enabled,
-      ...(denchCloudSelection.enabled
-        ? { config: { enabled: true } }
-        : {}),
+      ...(denchCloudSelection.enabled ? { config: { enabled: true } } : {}),
     },
   ];
 

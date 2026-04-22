@@ -73,10 +73,7 @@ function createWebProfilesResponse(params?: {
   } as unknown as Response;
 }
 
-function createJsonResponse(params?: {
-  status?: number;
-  payload?: unknown;
-}): Response {
+function createJsonResponse(params?: { status?: number; payload?: unknown }): Response {
   const status = params?.status ?? 200;
   return {
     status,
@@ -137,9 +134,7 @@ function parseConfigSetValue(raw: string): unknown {
 
 function applyConfigSet(stateDir: string, keyPath: string, rawValue: string): void {
   const configPath = path.join(stateDir, "openclaw.json");
-  const current = existsSync(configPath)
-    ? JSON.parse(readFileSync(configPath, "utf-8"))
-    : {};
+  const current = existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf-8")) : {};
   const segments = keyPath.split(".");
   let cursor: Record<string, unknown> = current;
   for (const segment of segments.slice(0, -1)) {
@@ -284,7 +279,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
     promptMocks.confirm.mockImplementation(async () =>
       promptMocks.confirmDecisions.length > 0
         ? promptMocks.confirmDecisions.shift()!
-        : promptMocks.confirmDecision
+        : promptMocks.confirmDecision,
     );
     promptMocks.select.mockReset();
     promptMocks.select.mockImplementation(async () => promptMocks.selectValue);
@@ -362,7 +357,11 @@ describe("bootstrapCommand always-onboard behavior", () => {
           stdout: `${JSON.stringify({ pending: pendingDeviceRequests, paired: pairedDevices })}\n`,
         }) as never;
       }
-      if (commandString === "openclaw" && argList.includes("devices") && argList.includes("approve")) {
+      if (
+        commandString === "openclaw" &&
+        argList.includes("devices") &&
+        argList.includes("approve")
+      ) {
         const requestId = argList.at(-1) ?? "";
         const match = pendingDeviceRequests.find((entry) => entry.requestId === requestId);
         if (!match) {
@@ -371,7 +370,9 @@ describe("bootstrapCommand always-onboard behavior", () => {
             stderr: `request not found: ${requestId}\n`,
           }) as never;
         }
-        pendingDeviceRequests = pendingDeviceRequests.filter((entry) => entry.requestId !== requestId);
+        pendingDeviceRequests = pendingDeviceRequests.filter(
+          (entry) => entry.requestId !== requestId,
+        );
         pairedDevices = [
           ...pairedDevices,
           {
@@ -385,11 +386,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
           stdout: `Approved ${String(match.deviceId ?? "device")} (${requestId})\n`,
         }) as never;
       }
-      if (
-        commandString === "openclaw" &&
-        argList.includes("config") &&
-        argList.includes("set")
-      ) {
+      if (commandString === "openclaw" && argList.includes("config") && argList.includes("set")) {
         const setIndex = argList.lastIndexOf("set");
         const keyPath = argList[setIndex + 1];
         const rawValue = argList[setIndex + 2];
@@ -791,9 +788,9 @@ describe("bootstrapCommand always-onboard behavior", () => {
     expect(updatedConfig.agents.defaults.model.primary).toBe(
       "dench-cloud/anthropic.claude-opus-4-6-v1",
     );
-    expect(updatedConfig.agents.defaults.models["dench-cloud/anthropic.claude-opus-4-6-v1"]).toEqual(
-      expect.objectContaining({ alias: "Claude Opus 4.6 (Dench Cloud)" }),
-    );
+    expect(
+      updatedConfig.agents.defaults.models["dench-cloud/anthropic.claude-opus-4-6-v1"],
+    ).toEqual(expect.objectContaining({ alias: "Claude Opus 4.6 (Dench Cloud)" }));
     expect(updatedConfig.plugins.allow).toContain("posthog-analytics");
     expect(updatedConfig.plugins.allow).toContain("dench-ai-gateway");
     expect(updatedConfig.plugins.allow).not.toContain("dench-cloud-provider");
@@ -981,13 +978,13 @@ describe("bootstrapCommand always-onboard behavior", () => {
       );
     });
 
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("D E N C H   C L O U D"),
-    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("D E N C H   C L O U D"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("App Integrations"));
     expect(promptMocks.confirm).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining("Continue with Dench Cloud? Recommended. API key: dench.com/api"),
+        message: expect.stringContaining(
+          "Continue with Dench Cloud? Recommended. API key: dench.com/api",
+        ),
       }),
     );
 
@@ -1903,7 +1900,9 @@ describe("bootstrapCommand always-onboard behavior", () => {
     );
     const gatewayRestartCalledInAutofix = spawnCalls.some(
       (call) =>
-        call.command === "openclaw" && call.args.includes("gateway") && call.args.includes("restart"),
+        call.command === "openclaw" &&
+        call.args.includes("gateway") &&
+        call.args.includes("restart"),
     );
     const toolsProfileSetCall = spawnCalls.find(
       (call) =>
@@ -2031,7 +2030,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
     expect(logMessages).toContain("gateway.err.log");
   });
 
-  it("stages exec and elevated commands config in raw JSON before onboard (webchat gets host exec from first boot)", async () => {
+  it("stages exec, elevated, and host approval config before onboard (webchat gets host exec from first boot)", async () => {
     const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: vi.fn(),
@@ -2049,6 +2048,8 @@ describe("bootstrapCommand always-onboard behavior", () => {
 
     const configPath = path.join(stateDir, "openclaw.json");
     const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    const execApprovalsPath = path.join(stateDir, "exec-approvals.json");
+    const execApprovals = JSON.parse(readFileSync(execApprovalsPath, "utf-8"));
     expect(config.tools?.exec?.security).toBe("full");
     expect(config.tools?.exec?.ask).toBe("off");
     expect(config.tools?.elevated?.enabled).toBe(true);
@@ -2056,6 +2057,9 @@ describe("bootstrapCommand always-onboard behavior", () => {
     expect(config.commands?.bash).toBe(true);
     expect(config.commands?.config).toBe(true);
     expect(config.agents?.defaults?.elevatedDefault).toBe("on");
+    expect(execApprovals.version).toBe(1);
+    expect(execApprovals.defaults?.security).toBe("full");
+    expect(execApprovals.defaults?.ask).toBe("off");
 
     const onboardIndex = spawnCalls.findIndex(
       (c) => c.command === "openclaw" && c.args.includes("onboard"),
@@ -2124,7 +2128,10 @@ describe("bootstrapCommand always-onboard behavior", () => {
           call.args.includes(key) &&
           call.args.includes(value),
       );
-      expect(postOnboardSetCall, `expected post-onboard config set for ${key}=${value}`).toBeDefined();
+      expect(
+        postOnboardSetCall,
+        `expected post-onboard config set for ${key}=${value}`,
+      ).toBeDefined();
       expect(postOnboardSetCall?.args).toEqual(
         expect.arrayContaining(["--profile", "dench", "config", "set", key, value]),
       );
@@ -2166,12 +2173,19 @@ describe("bootstrapCommand always-onboard behavior", () => {
     expect(elevatedEnabledCalls).toHaveLength(2);
     for (const call of elevatedEnabledCalls) {
       expect(call.args).toEqual(
-        expect.arrayContaining(["--profile", "dench", "config", "set", "tools.elevated.enabled", "true"]),
+        expect.arrayContaining([
+          "--profile",
+          "dench",
+          "config",
+          "set",
+          "tools.elevated.enabled",
+          "true",
+        ]),
       );
     }
   });
 
-  it("preserves exec and elevated config in final openclaw.json after full bootstrap cycle", async () => {
+  it("preserves exec, elevated, and host approval config after full bootstrap cycle", async () => {
     const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: vi.fn(),
@@ -2189,6 +2203,8 @@ describe("bootstrapCommand always-onboard behavior", () => {
 
     const configPath = path.join(stateDir, "openclaw.json");
     const finalConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+    const execApprovalsPath = path.join(stateDir, "exec-approvals.json");
+    const execApprovals = JSON.parse(readFileSync(execApprovalsPath, "utf-8"));
 
     expect(finalConfig.tools?.exec?.security).toBe("full");
     expect(finalConfig.tools?.exec?.ask).toBe("off");
@@ -2199,6 +2215,56 @@ describe("bootstrapCommand always-onboard behavior", () => {
     expect(finalConfig.commands?.config).toBe(true);
     expect(finalConfig.agents?.defaults?.timeoutSeconds).toBe(86400);
     expect(finalConfig.tools?.profile).toBe("full");
+    expect(execApprovals.version).toBe(1);
+    expect(execApprovals.defaults?.security).toBe("full");
+    expect(execApprovals.defaults?.ask).toBe("off");
+  });
+
+  it("preserves existing host exec approval rules while forcing permissive defaults", async () => {
+    writeFileSync(
+      path.join(stateDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 7,
+        defaults: {
+          security: "deny",
+          ask: "on-miss",
+        },
+        agents: {
+          "assistant:main": {
+            security: "deny",
+            ask: "on-request",
+          },
+        },
+      }),
+    );
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await bootstrapCommand(
+      {
+        nonInteractive: true,
+        noOpen: true,
+        skipUpdate: true,
+      },
+      runtime,
+    );
+
+    const execApprovals = JSON.parse(
+      readFileSync(path.join(stateDir, "exec-approvals.json"), "utf-8"),
+    );
+    expect(execApprovals.version).toBe(7);
+    expect(execApprovals.defaults?.security).toBe("full");
+    expect(execApprovals.defaults?.ask).toBe("off");
+    expect(execApprovals.agents).toEqual({
+      "assistant:main": {
+        security: "deny",
+        ask: "on-request",
+      },
+    });
   });
 
   it("strips npm_config_* env vars from npm global commands (prevents npx prefix hijack)", async () => {
@@ -2224,8 +2290,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
 
     const npmGlobalCalls = spawnCalls.filter(
       (call) =>
-        call.command === "npm" &&
-        (call.args.includes("-g") || call.args.includes("--global")),
+        call.command === "npm" && (call.args.includes("-g") || call.args.includes("--global")),
     );
 
     expect(npmGlobalCalls.length).toBeGreaterThan(0);
