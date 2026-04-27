@@ -712,20 +712,77 @@ type FirstColumnCellProps = {
 	onEntryClick?: (entryId: string) => void;
 };
 
+/**
+ * First-column cell for workspace tables.
+ *
+ * Two ways to open the entry:
+ *   1. Click the display value (only when non-empty) — preserves the
+ *      familiar "click the name to open" affordance.
+ *   2. Hover the row, click the "Open ↗" button at the right edge — works
+ *      regardless of whether the display value is empty.
+ *
+ * The Open button exists because the first column is the *display field*
+ * (e.g. People → Full Name, Companies → Name) and that field is sometimes
+ * blank. Without an explicit affordance, blank rows are effectively
+ * un-openable from the table — you'd have to use the row-actions menu,
+ * which is a worse hierarchy. Every CRM-style table (Linear, Notion,
+ * Attio, Airtable) solves this with the same pattern: hover-reveal a
+ * dedicated open button.
+ *
+ * The button uses Tailwind's `group-hover/row:opacity-100` against the
+ * `group/row` class on the parent `<tr>` (set by `TableRowInner` in
+ * data-table.tsx). It sits absolutely positioned at the right edge so
+ * it doesn't reserve layout space and doesn't cause the truncated text
+ * to jump when revealed. The button has its own background + border so
+ * it remains readable when it overlaps the trailing characters of a long
+ * truncated label.
+ */
 function FirstColumnCellInner({ value, entryId, onEntryClick }: FirstColumnCellProps) {
 	const displayVal = value === null || value === undefined || value === "" ? "--" : safeString(value);
 	const isEmpty = displayVal === "--";
-	const handleClick = useCallback((e: React.MouseEvent) => {
+	const handleTextClick = useCallback((e: React.MouseEvent) => {
 		e.stopPropagation();
 		if (entryId && !isEmpty && onEntryClick) {onEntryClick(entryId);}
 	}, [entryId, isEmpty, onEntryClick]);
+	const handleOpenClick = useCallback((e: React.MouseEvent) => {
+		e.stopPropagation();
+		if (entryId && onEntryClick) {onEntryClick(entryId);}
+	}, [entryId, onEntryClick]);
+	const showOpenButton = !!entryId && !!onEntryClick;
 	return (
-		<span
-			className={`font-semibold truncate block max-w-[300px] ${isEmpty || !onEntryClick ? "" : "cursor-pointer hover:underline"}`}
-			style={{ color: isEmpty ? "var(--color-text-muted)" : "var(--color-accent)", opacity: isEmpty ? 0.5 : 1 }}
-			onClick={handleClick}
-		>
-			{displayVal}
+		<span className="relative block w-full">
+			<span
+				className={`font-semibold truncate block ${isEmpty || !onEntryClick ? "" : "cursor-pointer hover:underline"}`}
+				style={{
+					color: isEmpty ? "var(--color-text-muted)" : "var(--color-accent)",
+					opacity: isEmpty ? 0.5 : 1,
+					maxWidth: showOpenButton ? "calc(100% - 60px)" : "100%",
+				}}
+				onClick={handleTextClick}
+			>
+				{displayVal}
+			</span>
+			{showOpenButton && (
+				<button
+					type="button"
+					onClick={handleOpenClick}
+					title="Open"
+					aria-label="Open entry"
+					className="absolute right-0 top-1/2 -translate-y-1/2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium cursor-pointer opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 transition-opacity duration-100 outline-none focus-visible:ring-1"
+					style={{
+						background: "var(--color-bg)",
+						color: "var(--color-text-muted)",
+						border: "1px solid var(--color-border)",
+						boxShadow: "var(--shadow-sm)",
+					}}
+				>
+					Open
+					<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+						<path d="M7 7h10v10" />
+						<path d="M7 17 17 7" />
+					</svg>
+				</button>
+			)}
 		</span>
 	);
 }
