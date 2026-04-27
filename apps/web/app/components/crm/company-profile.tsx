@@ -10,6 +10,7 @@ import { formatDayLabel, formatRelativeDate } from "./format-relative-date";
 import { EnrichButton } from "./enrich-button";
 import { ProfileThreadList } from "./inbox/profile-thread-list";
 import { EventListItem } from "./event-list-item";
+import { EditableTitleHeading } from "./editable-title-heading";
 
 // ---------------------------------------------------------------------------
 // API response shape (mirrors apps/web/app/api/crm/companies/[id]/route.ts)
@@ -129,6 +130,29 @@ export function CompanyProfile({
     void load();
   }, [load]);
 
+  // See PersonProfile for the rationale — optimistic local update keeps the
+  // header from re-skeletoning during a one-field save.
+  const handleSaveName = useCallback(
+    async (newName: string) => {
+      const res = await fetch(
+        `/api/workspace/objects/company/entries/${encodeURIComponent(companyId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fields: { "Company Name": newName } }),
+        },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      setData((prev) =>
+        prev ? { ...prev, company: { ...prev.company, name: newName } } : prev,
+      );
+    },
+    [companyId],
+  );
+
   if (loading && !data) {
     return (
       <div className="flex h-full flex-col" style={{ background: "var(--color-background)" }}>
@@ -156,7 +180,13 @@ export function CompanyProfile({
 
   return (
     <div className="flex h-full min-h-0 flex-col" style={{ background: "var(--color-background)" }}>
-      <CompanyHeader data={data} tab={tab} onTabChange={setTab} onBackToList={onBackToList} />
+      <CompanyHeader
+        data={data}
+        tab={tab}
+        onTabChange={setTab}
+        onBackToList={onBackToList}
+        onSaveName={handleSaveName}
+      />
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="mx-auto w-full max-w-4xl px-6 py-6">
           {tab === "overview" && <OverviewTab data={data} />}
@@ -184,14 +214,15 @@ function CompanyHeader({
   tab,
   onTabChange,
   onBackToList,
+  onSaveName,
 }: {
   data: CompanyResponse;
   tab: Tab;
   onTabChange: (t: Tab) => void;
   onBackToList?: () => void;
+  onSaveName: (newName: string) => Promise<void>;
 }) {
   const { company } = data;
-  const displayName = company.name?.trim() || company.domain || "Unknown company";
   return (
     <header
       className="shrink-0 px-6 pt-4 pb-0"
@@ -211,9 +242,7 @@ function CompanyHeader({
         <CompanyFavicon domain={company.domain} name={company.name} size="xl" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="font-instrument text-3xl tracking-tight truncate" style={{ color: "var(--color-text)" }}>
-              {displayName}
-            </h1>
+            <EditableTitleHeading name={company.name} saveName={onSaveName} />
             <ConnectionStrengthChip score={company.strength_score} />
           </div>
           <div
