@@ -11,6 +11,7 @@ import { EnrichButton } from "./enrich-button";
 import { ProfileThreadList } from "./inbox/profile-thread-list";
 import { EventListItem } from "./event-list-item";
 import { ActivityTimeline } from "./activity-timeline";
+import { EditableTitleHeading } from "./editable-title-heading";
 
 // ---------------------------------------------------------------------------
 // API response shape (mirrors apps/web/app/api/crm/people/[id]/route.ts)
@@ -140,6 +141,31 @@ export function PersonProfile({
     void load();
   }, [load]);
 
+  // Persist a new name when the heading was empty and the user filled it in.
+  // We optimistically write the new value to local `data` so the heading,
+  // avatar initials, and downstream subtitle copy update immediately —
+  // calling `load()` would flicker the entire page through a skeleton state.
+  const handleSaveName = useCallback(
+    async (newName: string) => {
+      const res = await fetch(
+        `/api/workspace/objects/people/entries/${encodeURIComponent(personId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fields: { "Full Name": newName } }),
+        },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      setData((prev) =>
+        prev ? { ...prev, person: { ...prev.person, name: newName } } : prev,
+      );
+    },
+    [personId],
+  );
+
   if (loading && !data) {
     return (
       <div className="flex h-full flex-col" style={{ background: "var(--color-background)" }}>
@@ -176,6 +202,7 @@ export function PersonProfile({
         onTabChange={setTab}
         onOpenCompany={onOpenCompany}
         onBackToList={onBackToList}
+        onSaveName={handleSaveName}
       />
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="mx-auto w-full max-w-4xl px-6 py-6">
@@ -214,14 +241,19 @@ function PersonHeader({
   onTabChange,
   onOpenCompany,
   onBackToList,
+  onSaveName,
 }: {
   data: PersonResponse;
   tab: Tab;
   onTabChange: (t: Tab) => void;
   onOpenCompany?: (id: string) => void;
   onBackToList?: () => void;
+  onSaveName: (newName: string) => Promise<void>;
 }) {
   const { person, company, derived_website } = data;
+  // Avatar still uses the email/Unknown fallback so an empty-name person
+  // gets a recognizable monogram from their email rather than a "?" tile —
+  // the heading itself swaps to the "Add a name" affordance independently.
   const displayName = person.name?.trim() || person.email || "Unknown contact";
   const website = company?.website || derived_website;
 
@@ -256,12 +288,7 @@ function PersonHeader({
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1
-              className="font-instrument text-3xl tracking-tight truncate"
-              style={{ color: "var(--color-text)" }}
-            >
-              {displayName}
-            </h1>
+            <EditableTitleHeading name={person.name} saveName={onSaveName} />
             <ConnectionStrengthChip score={person.strength_score} />
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
