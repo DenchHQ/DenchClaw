@@ -9,6 +9,16 @@ import { useState } from "react";
  * letter monogram if the image errors.
  *
  * Sizes match `PersonAvatar` for visual consistency in mixed lists.
+ *
+ * Visual model:
+ *   When a favicon is available, the image fills the rounded container
+ *   edge-to-edge (object-fit: cover) so the tile reads as the company's
+ *   logo, not as a small icon framed by a gray padding ring. Source
+ *   resolution is requested at 128px so retina rendering stays crisp
+ *   even at the largest size (xl=64px → 128 device px).
+ *   When no favicon is available (no domain, or fetch failed), we fall
+ *   back to a centered letter monogram against a subtle surface color
+ *   so the tile still has visual weight in mixed lists.
  */
 export function CompanyFavicon({
   domain,
@@ -27,7 +37,7 @@ export function CompanyFavicon({
 
   const cleanedDomain = domain?.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   const faviconUrl = cleanedDomain
-    ? `https://www.google.com/s2/favicons?sz=64&domain_url=${encodeURIComponent(cleanedDomain)}`
+    ? `https://www.google.com/s2/favicons?sz=128&domain_url=${encodeURIComponent(cleanedDomain)}`
     : null;
   const initial = (name ?? cleanedDomain ?? "?").charAt(0).toUpperCase();
 
@@ -39,7 +49,7 @@ export function CompanyFavicon({
       style={{
         width: px,
         height: px,
-        background: "var(--color-surface-hover)",
+        background: showImg ? "transparent" : "var(--color-surface-hover)",
         border: "1px solid var(--color-border)",
         color: "var(--color-text)",
         fontSize: fontPx,
@@ -52,12 +62,17 @@ export function CompanyFavicon({
         <img
           src={faviconUrl ?? undefined}
           alt=""
-          width={Math.round(px * 0.65)}
-          height={Math.round(px * 0.65)}
+          width={px}
+          height={px}
           decoding="async"
           loading="lazy"
           onError={() => setImgFailed(true)}
-          style={{ objectFit: "contain" }}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block",
+          }}
         />
       ) : (
         initial
