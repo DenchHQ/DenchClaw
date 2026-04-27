@@ -4,6 +4,7 @@ import {
   McpServerError,
   removeMcpServer,
 } from "@/lib/mcp-servers";
+import { trackServer } from "@/lib/telemetry";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -68,6 +69,11 @@ export async function POST(req: Request) {
       transport: body.transport,
       authToken: body.authToken,
     });
+    trackServer("mcp_server_added", {
+      key: server.key,
+      transport: server.transport,
+      has_auth: server.hasAuth,
+    });
     return Response.json({ server }, { status: 201 });
   } catch (err) {
     if (err instanceof McpServerError) {
@@ -94,6 +100,7 @@ export async function DELETE(req: Request) {
 
   try {
     removeMcpServer(body.key);
+    trackServer("mcp_server_removed", { key: body.key });
     return Response.json({ key: body.key });
   } catch (err) {
     if (err instanceof McpServerError) {

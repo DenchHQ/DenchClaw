@@ -20,16 +20,22 @@ vi.mock("@/lib/mcp-servers", () => {
   };
 });
 
+vi.mock("@/lib/telemetry", () => ({
+  trackServer: vi.fn(),
+}));
+
 const {
   addMcpServer,
   listMcpServers,
   McpServerError,
   removeMcpServer,
 } = await import("@/lib/mcp-servers");
+const { trackServer } = await import("@/lib/telemetry");
 
 const mockedAddMcpServer = vi.mocked(addMcpServer);
 const mockedListMcpServers = vi.mocked(listMcpServers);
 const mockedRemoveMcpServer = vi.mocked(removeMcpServer);
+const mockedTrackServer = vi.mocked(trackServer);
 
 describe("MCP settings API", () => {
   beforeEach(() => {
@@ -120,6 +126,11 @@ describe("MCP settings API", () => {
       transport: "streamable-http",
       hasAuth: true,
     });
+    expect(mockedTrackServer).toHaveBeenCalledWith("mcp_server_added", {
+      key: "acme",
+      transport: "streamable-http",
+      has_auth: true,
+    });
   });
 
   it("POST returns helper validation errors", async () => {
@@ -140,6 +151,7 @@ describe("MCP settings API", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: "MCP server 'acme' already exists.",
     });
+    expect(mockedTrackServer).not.toHaveBeenCalled();
   });
 
   it("DELETE validates key type", async () => {
@@ -166,6 +178,9 @@ describe("MCP settings API", () => {
     expect(response.status).toBe(200);
     expect(mockedRemoveMcpServer).toHaveBeenCalledWith("acme");
     expect(body).toEqual({ key: "acme" });
+    expect(mockedTrackServer).toHaveBeenCalledWith("mcp_server_removed", {
+      key: "acme",
+    });
   });
 
   it("DELETE returns helper not-found errors", async () => {
@@ -183,5 +198,6 @@ describe("MCP settings API", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: "MCP server 'missing' was not found.",
     });
+    expect(mockedTrackServer).not.toHaveBeenCalled();
   });
 });
