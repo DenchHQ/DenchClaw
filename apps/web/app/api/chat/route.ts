@@ -33,10 +33,6 @@ import {
 	buildChatImageHydrationErrorMessage,
 	hydrateMessageImageAttachments,
 } from "@/lib/chat-image-attachments";
-import {
-	buildAgentMessage,
-	type WorkspaceContext,
-} from "@/lib/agent-message";
 
 export const runtime = "nodejs";
 
@@ -94,7 +90,6 @@ export async function POST(req: Request) {
 		modelOverride,
 		acknowledgeUnsafeOpenAiSwitch,
 		hasAssistantHistory: hasAssistantHistoryHint,
-		workspaceContext,
 	}: {
 		messages: UIMessage[];
 		sessionId?: string;
@@ -104,7 +99,6 @@ export async function POST(req: Request) {
 		modelOverride?: string;
 		acknowledgeUnsafeOpenAiSwitch?: boolean;
 		hasAssistantHistory?: boolean;
-		workspaceContext?: WorkspaceContext;
 	} = await req.json();
 
 	const lastUserMessage = messages.filter((m) => m.role === "user").pop();
@@ -180,17 +174,14 @@ export async function POST(req: Request) {
 		}
 	}
 
-	// Build the prompt the agent sees. With workspaceContext sent as a
-	// structured body field (post v3-chat refactor), prefixes are
-	// reconstructed here rather than parsed back out of userText. Legacy
-	// callers without workspaceContext still work because buildAgentMessage
-	// returns userText unchanged when no context is supplied.
+	let agentMessage = userText;
 	const wsPrefix = resolveAgentWorkspacePrefix();
-	const agentMessage = buildAgentMessage({
-		userText,
-		workspaceContext,
-		workspacePrefix: wsPrefix,
-	});
+	if (wsPrefix) {
+		agentMessage = userText.replace(
+			/\[Context: workspace file '([^']+)'\]/,
+			`[Context: workspace file '${wsPrefix}/$1']`,
+		);
+	}
 	const imageHydration = hydrateMessageImageAttachments(agentMessage);
 	const imageHydrationError = buildChatImageHydrationErrorMessage(
 		imageHydration.skipped,

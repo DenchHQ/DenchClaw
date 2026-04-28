@@ -41,7 +41,6 @@ import type { ComposioChatAction } from "@/lib/composio-chat-actions";
 import type { ChatModelOption } from "@/lib/chat-models";
 import { prepareFilesForChatUpload } from "@/lib/chat-image-preparation";
 import { formatTableSelectionContext, type TableSelectionContext } from "@/lib/table-selection";
-import type { WorkspaceContext } from "@/lib/agent-message";
 
 // ── Attachment types & helpers ──
 
@@ -763,6 +762,14 @@ export type FileContext = {
 	tableSelection?: TableSelectionContext;
 };
 
+type FileScopedSession = {
+	id: string;
+	title: string;
+	createdAt: number;
+	updatedAt: number;
+	messageCount: number;
+};
+
 /** A message waiting to be sent after the current agent run finishes. */
 type QueuedMessage = {
 	id: string;
@@ -966,16 +973,14 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		// the agent is re-informed about the current context.
 		const lastAnnouncedFilePathRef = useRef<string | null>(null);
 
+		// File-scoped session list (compact mode only)
+		const [fileSessions, setFileSessions] = useState<
+			FileScopedSession[]
+		>([]);
+
 		// ── Rich HTML for user messages (keyed by message ID or text fallback) ──
 		const userHtmlMapRef = useRef(new Map<string, string>());
 		const pendingHtmlRef = useRef<string | null>(null);
-
-		// Workspace context to send with the next /api/chat POST. Set by
-		// handleEditorSubmit just before it calls sendMessage; read once and
-		// cleared by the transport body callback below. Sending it as a
-		// structured field (instead of baking prefixes into the user message)
-		// keeps persisted user text — and the chat title — clean.
-		const pendingWorkspaceContextRef = useRef<WorkspaceContext | null>(null);
 
 		// ── Message queue (messages to send after current run completes) ──
 		const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
@@ -1048,10 +1053,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							extra.userHtml = pendingHtmlRef.current;
 							pendingHtmlRef.current = null;
 						}
-						if (pendingWorkspaceContextRef.current) {
-							extra.workspaceContext = pendingWorkspaceContextRef.current;
-							pendingWorkspaceContextRef.current = null;
-						}
 					return extra;
 				},
 				prepareSendMessagesRequest: ({ messages: allMessages, body }) => {
@@ -1085,10 +1086,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			}
 		}, [messages.length, optimisticUserText]);
 
-		// Sessions are now created lazily on the first submit (see
-		// handleEditorSubmit). The previous "warmup on hero mount" path
-		// produced empty session rows in the sidebar whenever the user
-		// opened a +/new chat and then navigated away without typing.
+		// Track an in-flight pre-created session so we don't fire it twice.
+		const preCreatedSessionRef = useRef<Promise<string> | null>(null);
 
 		const isStreaming =
 			status === "streaming" ||
@@ -1227,24 +1226,19 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 		const createSession = useCallback(
 			async (title: string): Promise<string> => {
-				// All chat sessions are workspace-level since the v3 three-column
-				// refactor. The previous behavior — binding `filePath` on the
-				// session whenever any content tab was active — caused the
-				// workspace sidebar to hide perfectly normal chats started from
-				// CRM views or virtual tabs (the sidebar still filters out
-				// sessions with `filePath` set, which is the correct behavior
-				// for legacy file-scoped sessions). Workspace context for the
-				// agent is now carried per-message via `workspaceContext` on
-				// POST /api/chat, so the session itself stays unscoped.
+				const body: Record<string, string> = { title };
+				if (filePath) {
+					body.filePath = filePath;
+				}
 				const res = await fetch("/api/web-sessions", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ title }),
+					body: JSON.stringify(body),
 				});
 				const data = await res.json();
 				return data.session.id;
 			},
-			[],
+			[filePath],
 		);
 
 		// ── Stream reconnection ──
@@ -1385,11 +1379,34 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			[setMessages],
 		);
 
-		// v3 three-column refactor: file-scoped sessions were removed. The
-		// center chat keeps its current session regardless of which file is
-		// open on the right panel. `fileContext` (via `filePath`) only
-		// augments the per-message workspaceContext payload — it never
-		// resets the panel or swaps to a file-scoped session.
+		// ── File-scoped session initialization ──
+		const fetchFileSessionsRef = useRef<
+			(() => Promise<FileScopedSession[]>) | null
+		>(null);
+
+		fetchFileSessionsRef.current = async () => {
+			if (!filePath) {
+				return [];
+			}
+			try {
+				const res = await fetch(
+					`/api/web-sessions?filePath=${encodeURIComponent(filePath)}`,
+				);
+				const data = await res.json();
+				return (data.sessions || []) as FileScopedSession[];
+			} catch {
+				return [];
+			}
+		};
+
+		// v3 three-column refactor: file-scoped sessions were removed.
+		// The center chat keeps its current session regardless of which file is opened on
+		// the right panel. `fileContext` (via `filePath`) only augments the message payload
+		// ("[Context: workspace file 'X']") and the input placeholder — it no longer resets
+		// the panel or swaps to a file-scoped session.
+		useEffect(() => {
+			return;
+		}, [filePath]);
 
 		// v3: auto-restore session on mount or URL change.
 		// Note: this previously short-circuited when `filePath` was set (file-scoped chat mode);
@@ -1600,6 +1617,14 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					savedMessageIdsRef.current.add(m.id);
 				}
 
+			if (filePath) {
+				void fetchFileSessionsRef.current?.().then(
+					(sessions) => {
+						setFileSessions(sessions);
+					},
+				);
+			}
+
 			if (filePath && onFileChanged) {
 					fetch(
 						`/api/workspace/file?path=${encodeURIComponent(filePath)}`,
@@ -1788,37 +1813,32 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						setOptimisticUserText(userText);
 					}
 
-					// Create the session lazily on first submit. This is the
-					// only place where a workspace-level session is created
-					// from the chat panel — the previous mount-time warmup
-					// was removed because it produced empty session rows in
-					// the sidebar whenever a user opened a chat and walked
-					// away without typing.
-					sessionId = await createSession(title);
+					// Reuse a session that may already be in flight from the
+					// pre-create-on-mount warmup. Fall back to a fresh call.
+					sessionId = await (preCreatedSessionRef.current ?? createSession(title));
+					preCreatedSessionRef.current = null;
 					setCurrentSessionId(sessionId);
 					sessionIdRef.current = sessionId;
 					onActiveSessionChange?.(sessionId);
 					onSessionsChange?.();
+
+					if (filePath) {
+						void fetchFileSessionsRef.current?.().then(
+							(sessions) => {
+								setFileSessions(sessions);
+							},
+						);
+					}
 				}
 
-				// Two prefix kinds, two destinations:
-				//
-				// 1. `[Attached files: …]` stays inline in the user message
-				//    text. chat-message.tsx parses it back out to render
-				//    the AttachedFilesCard above the bubble, so this prefix
-				//    is load-bearing for the UI. The session-title cleaner
-				//    strips it, so titles still read like normal prose.
-				// 2. `[Context: workspace …]` and `[Selected table …]` are
-				//    agent-only signals (no UI affordance). They move to a
-				//    structured `workspaceContext` body field so they never
-				//    end up in the persisted user text — that polluted
-				//    chat titles in the sidebar and was the bug report.
+				// Build message with optional attachment prefix
+				let messageText = userText;
+
+				// Merge mention paths and attachment paths
 				const allFilePaths = [
 					...mentionedFiles.map((f) => f.path),
 					...currentAttachments.map((f) => f.path),
 				];
-
-				let messageText = userText;
 				if (allFilePaths.length > 0) {
 					const prefix = `[Attached files: ${allFilePaths.join(", ")}]`;
 					messageText = messageText
@@ -1826,53 +1846,27 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						: prefix;
 				}
 
-				const announceFilePath =
-					!!fileContext &&
-					lastAnnouncedFilePathRef.current !== fileContext.path;
-
-				const workspaceContext: WorkspaceContext = {};
-				if (announceFilePath && fileContext) {
-					workspaceContext.filePath = fileContext.path;
-					workspaceContext.isDirectory = fileContext.isDirectory;
-				}
-				if (fileContext?.tableSelection) {
-					workspaceContext.tableSelection = fileContext.tableSelection;
-				}
-
-				if (announceFilePath && fileContext) {
+				if (fileContext && lastAnnouncedFilePathRef.current !== fileContext.path) {
+					const label = fileContext.isDirectory ? "directory" : "file";
+					messageText = `[Context: workspace ${label} '${fileContext.path}']\n\n${messageText}`;
 					lastAnnouncedFilePathRef.current = fileContext.path;
 				}
 
+				if (fileContext?.tableSelection) {
+					messageText = `${formatTableSelectionContext(fileContext.tableSelection)}\n\n${messageText}`;
+				}
+
+				// Store HTML for display and pipe to server via transport
+				userHtmlMapRef.current.set(messageText, html);
 				pendingHtmlRef.current = html;
 
 				userScrolledAwayRef.current = false;
 
 				if (gatewaySessionKey) {
-					// The gateway flow is a separate transport (POST /api/gateway/chat
-					// sends `{message: string}` to an upstream gateway that owns
-					// session storage). It still expects an inline-prefixed prompt
-					// for ALL signals — including Context/Selected-table — since
-					// it has no `workspaceContext` field, so assemble the full
-					// legacy messageText for that path only.
-					let gatewayMessageText = messageText;
-					if (announceFilePath && fileContext) {
-						const label = fileContext.isDirectory ? "directory" : "file";
-						gatewayMessageText = `[Context: workspace ${label} '${fileContext.path}']\n\n${gatewayMessageText}`;
-					}
-					if (fileContext?.tableSelection) {
-						gatewayMessageText = `${formatTableSelectionContext(fileContext.tableSelection)}\n\n${gatewayMessageText}`;
-					}
-
-					// Key the HTML map by the SAME text the UI message will carry,
-					// so chat-message.tsx's `userHtmlMap.get(textContent)` lookup
-					// matches and the rich rendering (mention pills etc.) is
-					// preserved on first render of the user's bubble.
-					userHtmlMapRef.current.set(gatewayMessageText, html);
-
 					const userMsg = {
 						id: `user-${Date.now()}`,
 						role: "user" as const,
-						parts: [{ type: "text" as const, text: gatewayMessageText }] as UIMessage["parts"],
+						parts: [{ type: "text" as const, text: messageText }] as UIMessage["parts"],
 					};
 					setMessages((prev) => [...prev, userMsg]);
 
@@ -1880,7 +1874,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						const res = await fetch("/api/gateway/chat", {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ sessionKey: gatewaySessionKey, message: gatewayMessageText }),
+							body: JSON.stringify({ sessionKey: gatewaySessionKey, message: messageText }),
 						});
 						if (res.ok && res.body) {
 							setStreamError(null);
@@ -1893,17 +1887,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						setStreamError("Failed to send message.");
 					}
 				} else {
-					// /api/chat path: send messageText (raw text + inline
-					// attachments prefix only) + structured workspaceContext
-					// via the transport body callback.
-					//
-					// useChat's sendMessage will create a UI message whose
-					// text part equals `messageText`, so key the HTML map by
-					// `messageText` to match chat-message.tsx's lookup.
-					userHtmlMapRef.current.set(messageText, html);
-					if (Object.keys(workspaceContext).length > 0) {
-						pendingWorkspaceContextRef.current = workspaceContext;
-					}
 					void sendMessage({ text: messageText });
 				}
 
@@ -1918,6 +1901,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				createSession,
 				onActiveSessionChange,
 				onSessionsChange,
+				filePath,
 				fileContext,
 				sendMessage,
 				gatewaySessionKey,
@@ -2067,6 +2051,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			userHtmlMapRef.current.clear();
 			lastAnnouncedFilePathRef.current = null;
 			newSessionPendingRef.current = false;
+			// Drop any in-flight warmup session — otherwise the next submit
+			// would reuse the pre-warmed id (handleEditorSubmit reads this
+			// ref before falling back to a fresh createSession), silently
+			// threading the "new" chat into the old session instead of
+			// starting clean. The pre-create effect will re-arm on the next
+			// tick for the new chat.
+			preCreatedSessionRef.current = null;
 			setQueuedMessages([]);
 			requestAnimationFrame(() => {
 				editorRef.current?.focus();
@@ -2269,6 +2260,25 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			!isSubagentMode &&
 			!loadingSession &&
 			optimisticUserText === null;
+
+		// Warm up the session in the background while the user is still on
+		// the hero screen, so the first submit doesn't pay for createSession
+		// (which can be slow on cold-start dev compiles). Pre-creates only
+		// when the panel is visible and there's no session yet.
+		useEffect(() => {
+			if (
+				!visible ||
+				currentSessionId ||
+				isSubagentMode ||
+				isGatewayMode ||
+				loadingSession ||
+				preCreatedSessionRef.current ||
+				messages.length > 0
+			) {
+				return;
+			}
+			preCreatedSessionRef.current = createSession("New Chat");
+		}, [visible, currentSessionId, isSubagentMode, isGatewayMode, loadingSession, messages.length, createSession]);
 
 		// ── Input bar content (shared between hero and bottom positions) ──
 

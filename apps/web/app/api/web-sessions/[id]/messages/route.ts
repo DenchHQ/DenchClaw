@@ -6,7 +6,6 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { resolveWebChatDir } from "@/lib/workspace";
-import { cleanTitleText } from "../../shared";
 
 export const dynamic = "force-dynamic";
 
@@ -138,7 +137,10 @@ function deriveTitleFromMessages(lines: string[]): string | null {
           .map((p: UITextPart) => p.text)
           .join(" ");
       }
-      const cleaned = cleanTitleText(text);
+      const cleaned = text
+        .replace(/\[Attached files:[^\]]*\]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
       if (!cleaned) {continue;}
       return cleaned.length > 60 ? cleaned.slice(0, 60).trimEnd() + "…" : cleaned;
     } catch {
