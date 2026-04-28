@@ -119,6 +119,24 @@ describe("Web Sessions API", () => {
       expect(mockWrite).toHaveBeenCalled();
     });
 
+    it("creates a workspace-level session (no filePath) when filePath is omitted", async () => {
+      // The chat panel's createSession (post v3 fix) intentionally never
+      // sends `filePath` — workspace context is now per-message, not
+      // per-session. The sidebar filter still hides any session that
+      // does have a filePath, so this assertion guards against a
+      // regression where filePath sneaks back into createSession bodies.
+      const { POST } = await import("./route.js");
+      const req = new Request("http://localhost/api/web-sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Workspace Chat" }),
+      });
+      const res = await POST(req);
+      const json = await res.json();
+      expect(json.session.title).toBe("Workspace Chat");
+      expect(json.session.filePath).toBeUndefined();
+    });
+
     it("creates session with custom title", async () => {
       const { POST } = await import("./route.js");
       const req = new Request("http://localhost/api/web-sessions", {
@@ -299,6 +317,57 @@ describe("Web Sessions API", () => {
       expect(res.status).toBe(200);
       // Verify index was written with new title
       expect(mockWrite).toHaveBeenCalled();
+    });
+  });
+
+  describe("cleanTitleText", () => {
+    it("strips [Attached files: ...] prefixes", async () => {
+      const { cleanTitleText } = await import("./shared.js");
+      expect(
+        cleanTitleText("[Attached files: a.md, b.md]\n\nsummarize"),
+      ).toBe("summarize");
+    });
+
+    it("strips [Context: workspace file '...'] prefixes", async () => {
+      const { cleanTitleText } = await import("./shared.js");
+      expect(
+        cleanTitleText("[Context: workspace file 'company']\n\nhow you doing?"),
+      ).toBe("how you doing?");
+    });
+
+    it("strips [Context: workspace directory '...'] prefixes", async () => {
+      const { cleanTitleText } = await import("./shared.js");
+      expect(
+        cleanTitleText(
+          "[Context: workspace directory '~crm/people']\n\nlist everyone",
+        ),
+      ).toBe("list everyone");
+    });
+
+    it("strips [Selected table rows: ...] blocks even when multiline", async () => {
+      const { cleanTitleText } = await import("./shared.js");
+      const input =
+        "[Selected table rows: people]\n3 rows selected.\nColumns: name, email\n- row 1 (p1): name: Ada\n\nwhat are these?";
+      expect(cleanTitleText(input)).toBe("what are these?");
+    });
+
+    it("strips multiple stacked prefixes from a single message", async () => {
+      const { cleanTitleText } = await import("./shared.js");
+      const input =
+        "[Selected table cells: people]\n1 row selected.\n\n[Context: workspace directory '~crm/people']\n\n[Attached files: notes.md]\n\nhelp me write a follow up";
+      expect(cleanTitleText(input)).toBe("help me write a follow up");
+    });
+
+    it("returns empty string when message is only prefixes", async () => {
+      const { cleanTitleText } = await import("./shared.js");
+      expect(
+        cleanTitleText("[Context: workspace file 'doc.md']"),
+      ).toBe("");
+    });
+
+    it("leaves untouched text alone", async () => {
+      const { cleanTitleText } = await import("./shared.js");
+      expect(cleanTitleText("plain old message")).toBe("plain old message");
     });
   });
 });

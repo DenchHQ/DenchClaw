@@ -425,6 +425,10 @@ describe("Chat API routes", () => {
     });
 
     it("resolves workspace file paths in message", async () => {
+      // Post v3-chat refactor, the client sends raw user text plus a
+      // structured `workspaceContext` body field. The route reconstructs
+      // the `[Context: workspace file '...']` prefix and applies the
+      // workspace prefix from resolveAgentWorkspacePrefix.
       const { resolveAgentWorkspacePrefix } = await import("@/lib/workspace");
       vi.mocked(resolveAgentWorkspacePrefix).mockReturnValue("workspace");
       const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
@@ -441,16 +445,92 @@ describe("Chat API routes", () => {
             {
               id: "m1",
               role: "user",
-              parts: [{ type: "text", text: "[Context: workspace file 'doc.md']" }],
+              parts: [{ type: "text", text: "what does this say?" }],
             },
           ],
           sessionId: "s1",
+          workspaceContext: { filePath: "doc.md", isDirectory: false },
         }),
       });
       await POST(req);
       expect(startRun).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining("workspace/doc.md"),
+          message: expect.stringContaining(
+            "[Context: workspace file 'workspace/doc.md']",
+          ),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("what does this say?"),
+        }),
+      );
+    });
+
+    it("layers Context + Selected-table prefixes on top of inline attachments", async () => {
+      // [Attached files: …] is intentionally NOT moved into workspaceContext
+      // — it stays in the user message text because chat-message.tsx parses
+      // it to render the AttachedFilesCard. The agent prompt should have
+      // table selection FIRST, then Context, then Attached files, then user
+      // text — matching the legacy ordering the agent already understands.
+      const { resolveAgentWorkspacePrefix } = await import("@/lib/workspace");
+      vi.mocked(resolveAgentWorkspacePrefix).mockReturnValue(null);
+      const { startRun, persistUserMessage, hasActiveRun, subscribeToRun } =
+        await import("@/lib/active-runs");
+      vi.mocked(hasActiveRun).mockReturnValue(false);
+      vi.mocked(subscribeToRun).mockReturnValue(() => {});
+      vi.mocked(startRun).mockClear();
+      vi.mocked(persistUserMessage).mockClear();
+
+      const { POST } = await import("./route.js");
+      const req = new Request("http://localhost/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            {
+              id: "m1",
+              role: "user",
+              parts: [
+                {
+                  type: "text",
+                  text: "[Attached files: notes.md]\n\nsummarize this",
+                },
+              ],
+            },
+          ],
+          sessionId: "s1",
+          workspaceContext: {
+            filePath: "~crm/people",
+            isDirectory: true,
+          },
+        }),
+      });
+      await POST(req);
+
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "[Context: workspace directory '~crm/people']",
+          ),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("[Attached files: notes.md]"),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("summarize this"),
+        }),
+      );
+      // persistUserMessage stores the message text the user actually sees
+      // (with the Attached files prefix); the title cleaner strips it on read.
+      expect(persistUserMessage).toHaveBeenCalledWith(
+        "s1",
+        expect.objectContaining({
+          content: "[Attached files: notes.md]\n\nsummarize this",
         }),
       );
     });

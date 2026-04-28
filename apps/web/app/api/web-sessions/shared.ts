@@ -85,15 +85,25 @@ export function readIndex(): WebSessionMeta[] {
       dirty = true;
     }
 
-    // 2) Retitle any indexed session that still says "New Chat" but has
-    //    actual user content on disk. This catches chats that were
-    //    created before the server-side auto-title logic landed.
+    // 2) Retitle indexed sessions whose stored title needs cleanup:
+    //    - still says "New Chat" but has user content on disk (chats
+    //      created before the server-side auto-title logic landed), or
+    //    - currently displays a bracketed prefix like
+    //      `[Context: workspace file '...']` / `[Selected table ...]` /
+    //      `[Attached files: ...]` that leaked in before the v3-chat wire
+    //      format moved that metadata to a structured field.
     for (const session of index) {
-      if (session.title && session.title !== "New Chat") {continue;}
+      const needsBackfill = !session.title || session.title === "New Chat";
+      const hasBracketPrefix =
+        !!session.title &&
+        /\[(?:Context: workspace|Selected table|Attached files:)/.test(
+          session.title,
+        );
+      if (!needsBackfill && !hasBracketPrefix) {continue;}
       const fp = join(dir, `${session.id}.jsonl`);
       if (!existsSync(fp)) {continue;}
       const { title } = summarizeSessionFile(fp);
-      if (title && title !== "New Chat") {
+      if (title && title !== "New Chat" && title !== session.title) {
         session.title = title;
         dirty = true;
       }
@@ -106,6 +116,23 @@ export function readIndex(): WebSessionMeta[] {
   } catch { /* best-effort */ }
 
   return index;
+}
+
+/**
+ * Strip workspace-context/attachment/table-selection prefixes from text
+ * intended for use as a chat title. Older sessions baked these prefixes
+ * directly into the persisted user message (the new wire format sends
+ * them as a structured `workspaceContext` field instead), so this cleanup
+ * is what retroactively fixes ugly titles like
+ * `[Context: workspace file 'company']` showing up in the sidebar.
+ */
+export function cleanTitleText(text: string): string {
+  return text
+    .replace(/\[Context:\s*workspace\s+(?:file|directory)\s+'[^']*'\]/g, "")
+    .replace(/\[Selected table (?:rows|cells)[^\]]*\][\s\S]*?(?=\n\n|$)/g, "")
+    .replace(/\[Attached files:[^\]]*\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -139,10 +166,7 @@ function summarizeSessionFile(fp: string): { title: string; messageCount: number
             .map((p: UITextPart) => p.text)
             .join(" ");
         }
-        const cleaned = text
-          .replace(/\[Attached files:[^\]]*\]/g, "")
-          .replace(/\s+/g, " ")
-          .trim();
+        const cleaned = cleanTitleText(text);
         if (!cleaned) {continue;}
         title = cleaned.length > 60 ? cleaned.slice(0, 60).trimEnd() + "…" : cleaned;
         break;
