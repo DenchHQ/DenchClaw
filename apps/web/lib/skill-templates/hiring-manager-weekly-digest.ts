@@ -1,13 +1,80 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const hiringManagerWeeklyDigest = createSkillTemplate({
+export const hiringManagerWeeklyDigest = defineSkillTemplate({
   id: "hiring-manager-weekly-digest",
   title: "Hiring Manager Weekly Digest",
   summary: "Send hiring managers a weekly summary of pipeline health and decisions needed.",
   category: "Hire People",
   outcome: "Summarizes candidates, interviews, feedback gaps, risks, and decisions required by each hiring manager.",
+  userUseCase: "Send hiring managers a weekly operating brief that turns candidate records, interviews, feedback gaps, and process blockers into the few decisions they need to make.",
   personas: ["Recruiter", "Founder", "Operator"],
   requiredApps: [externalApps.googleCalendar, externalApps.slack, externalApps.notion],
   triggerModes: ["scheduled", "manual"],
-  focusAreas: ["roles covered", "weekly sections", "escalation rules", "delivery channel"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "audience-scope",
+      prompt: "Which hiring manager, team, or roles should the digest cover?",
+      required: true,
+      freeformHint: "Specify manager, role names, departments, CRM views, or candidate pipelines.",
+    },
+    {
+      id: "digest-sections",
+      prompt: "Which sections should the weekly digest include?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "pipeline", label: "Pipeline snapshot" },
+        { id: "interviews", label: "Upcoming interviews" },
+        { id: "feedback", label: "Overdue feedback" },
+        { id: "blockers", label: "Blockers" },
+        { id: "priority-candidates", label: "Priority candidates" },
+      ],
+    },
+    {
+      id: "source-systems",
+      prompt: "Which sources should be checked before writing the digest?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "crm", label: "Candidate CRM" },
+        { id: "calendar", label: "Calendar" },
+        { id: "gmail", label: "Gmail" },
+        { id: "slack", label: "Slack" },
+        { id: "notion", label: "Notion" },
+        { id: "files", label: "Files" },
+      ],
+    },
+    {
+      id: "delivery-policy",
+      prompt: "When and where should the digest be delivered?",
+      required: true,
+      options: [
+        { id: "weekly-slack", label: "Weekly Slack" },
+        { id: "weekly-gmail", label: "Weekly Gmail draft" },
+        { id: "notion-page", label: "Notion page" },
+        { id: "manual-only", label: "Manual only" },
+      ],
+      freeformHint: "Include weekday, time, timezone, recipients, and privacy level.",
+    },
+    {
+      id: "candidate-privacy",
+      prompt: "How much candidate detail is appropriate for this audience?",
+      required: true,
+      options: [
+        { id: "names-ok", label: "Names ok" },
+        { id: "role-stage-only", label: "Role and stage only" },
+        { id: "private-links", label: "Private links" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Include only hiring information the audience is authorized to see, and minimize candidate personal data in broad digests.",
+    "Use role-related and process-related signals only: stage, next step, feedback status, interview schedule, scorecard completion, and authorized notes.",
+    "Do not mention, infer, rank, or summarize candidates using protected-class or sensitive attributes.",
+    "Cite private digest claims with Dench records, Calendar events, Gmail threads, files, Slack threads, or Notion pages.",
+    "Prioritize blockers that require hiring-manager attention in the next week, not every low-level pipeline detail.",
+    "For weekly cron digests, compare against the prior week and highlight stage movement, newly stale candidates, and resolved blockers.",
+    "Format the digest as executive summary, pipeline snapshot, priority decisions, overdue feedback, upcoming interviews, blockers, and recommended actions.",
+  ],
 });

@@ -1,13 +1,81 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const proposalChaser = createSkillTemplate({
+export const proposalChaser = defineSkillTemplate({
   id: "proposal-chaser",
   title: "Proposal Chaser",
   summary: "Follow up on sent proposals without sounding desperate or repetitive.",
   category: "Follow Up",
   outcome: "Tracks sent proposals, detects stalled decisions, sends next-step nudges, and keeps forecast notes accurate.",
+  userUseCase: "Use when proposals, quotes, contracts, partnership terms, or fundraising materials have been sent and the owner needs polite follow-through. The skill should understand proposal status from CRM, sent email, files, and HubSpot context, then draft or send stage-appropriate nudges without inventing terms or pressure.",
   personas: ["Founder", "Sales", "Investor/BD"],
   requiredApps: [externalApps.gmail, externalApps.hubspot],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["proposal status source", "decision timeline", "escalation path", "forecast updates"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "proposal-source",
+      prompt: "Where should DenchClaw find proposals to chase?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "crm-deals", label: "CRM deals" },
+        { id: "hubspot-stage", label: "HubSpot stage" },
+        { id: "gmail-sent", label: "Gmail sent mail" },
+        { id: "uploaded-tracker", label: "Uploaded tracker" },
+        { id: "manual-list", label: "Manual list" },
+      ],
+    },
+    {
+      id: "proposal-types",
+      prompt: "What kinds of proposals should this handle?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "sales-proposal", label: "Sales proposal" },
+        { id: "services-sow", label: "Services SOW" },
+        { id: "partnership", label: "Partnership" },
+        { id: "investment-materials", label: "Investment materials" },
+        { id: "contract-redlines", label: "Contract or redlines" },
+      ],
+    },
+    {
+      id: "chase-timing",
+      prompt: "When should DenchClaw follow up after a proposal is sent?",
+      required: true,
+      options: [
+        { id: "2-business-days", label: "2 business days" },
+        { id: "5-business-days", label: "5 business days" },
+        { id: "1-week", label: "1 week" },
+        { id: "custom", label: "Custom" },
+      ],
+      freeformHint: "Include decision dates, procurement timelines, and whether weekends count.",
+    },
+    {
+      id: "escalation-path",
+      prompt: "How should follow-ups escalate if there is no answer?",
+      required: true,
+      options: [
+        { id: "gentle-only", label: "Gentle only" },
+        { id: "add-value", label: "Add useful context" },
+        { id: "ask-for-blocker", label: "Ask about blockers" },
+        { id: "breakup", label: "Close-the-loop note" },
+      ],
+      freeformHint: "Specify max attempts and whether to involve another stakeholder.",
+    },
+    {
+      id: "send-forecast-guardrails",
+      prompt: "What send, quiet-hour, reply-detection, and forecast update rules should apply?",
+      required: true,
+      freeformHint: "Include draft vs auto-send, caps, accepted/rejected proposal signals, stakeholder replies, meetings booked, and forecast fields to update.",
+    },
+  ],
+  skillInstructions: [
+    "Identify open proposals from CRM, HubSpot, sent email, uploaded trackers, or manual input, attaching proposal file, amount, owner, sent date, stakeholders, and next-step promise when available.",
+    "Classify each proposal by stage and urgency: waiting for first response, decision overdue, procurement or legal, verbal yes, stakeholder missing, or likely stalled.",
+    "Draft follow-ups that match the stage: confirm receipt, offer clarification, surface a useful detail, ask about blockers, propose a decision meeting, or send a polite close-the-loop note.",
+    "Do not invent proposal terms, pricing, deadlines, discounts, or legal claims; quote only from CRM fields, user-provided files, or the actual thread.",
+    "Send only under explicit rules with daily caps, quiet hours, recipient allowlists, and duplicate checks; otherwise create drafts and CRM tasks for owner review.",
+    "For scheduled runs, compare against Gmail and CRM activity plus prior Dench notes so the same proposal is not chased twice after a reply, meeting, or owner action.",
+    "Stop or hand off when a reply is detected, proposal is accepted or rejected, a meeting is booked, deal stage changes, procurement/legal owner takes over, contact opts out, or the user marks the opportunity paused.",
+  ],
 });

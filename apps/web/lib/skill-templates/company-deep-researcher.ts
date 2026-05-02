@@ -1,13 +1,82 @@
-import { createSkillTemplate } from "./create-template";
+import { defineSkillTemplate } from "./create-template";
 
-export const companyDeepResearcher = createSkillTemplate({
+export const companyDeepResearcher = defineSkillTemplate({
   id: "company-deep-researcher",
   title: "Company Deep Researcher",
   summary: "Create a sourced company dossier for sales, hiring, investing, or strategy.",
   category: "Research Anything",
   outcome: "Builds a sourced company brief with business model, team, market, recent news, risks, and recommended actions.",
+  userUseCase: "Use this when a user needs a cited company brief that can support a sales account plan, investor diligence, recruiting context, partnership evaluation, or strategic research. The skill should combine Dench-native CRM, enrichment, web search, and files first, then use connected Gmail, Calendar, Notion, Slack, or LinkedIn context only when relevant and authorized.",
   personas: ["Founder", "Sales", "Investor/BD", "Knowledge Worker"],
   requiredApps: [],
   triggerModes: ["manual"],
-  focusAreas: ["research purpose", "sections needed", "source rules", "output format"],
+  autonomy: "Creates drafts",
+  interviewQuestions: [
+    {
+      id: "research-goal",
+      prompt: "What decision should this company brief support?",
+      required: true,
+      options: [
+        { id: "sales", label: "Sales plan" },
+        { id: "investment", label: "Investment diligence" },
+        { id: "hiring", label: "Hiring context" },
+        { id: "partnership", label: "Partnership evaluation" },
+        { id: "strategy", label: "Strategy research" },
+      ],
+      freeformHint: "Name the audience, decision, and depth needed.",
+    },
+    {
+      id: "target-company",
+      prompt: "Which company should be researched?",
+      required: true,
+      freeformHint: "Provide a company name, domain, CRM record, profile URL, or source file.",
+    },
+    {
+      id: "source-priority",
+      prompt: "Which sources should be prioritized?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "crm", label: "CRM notes" },
+        { id: "enrichment", label: "Enrichment" },
+        { id: "web", label: "Web research" },
+        { id: "files", label: "Files" },
+        { id: "connected-context", label: "Connected apps" },
+      ],
+    },
+    {
+      id: "brief-sections",
+      prompt: "Which sections should the brief include?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "overview", label: "Overview" },
+        { id: "team", label: "Team" },
+        { id: "market", label: "Market" },
+        { id: "news", label: "Recent news" },
+        { id: "risks", label: "Risks" },
+        { id: "actions", label: "Actions" },
+      ],
+    },
+    {
+      id: "output-format",
+      prompt: "Where should the final brief be saved or delivered?",
+      required: true,
+      options: [
+        { id: "dench-note", label: "Dench note" },
+        { id: "markdown", label: "Markdown" },
+        { id: "gmail-draft", label: "Gmail draft" },
+        { id: "notion-page", label: "Notion page" },
+      ],
+      freeformHint: "Include desired length, destination, and citation style.",
+    },
+  ],
+  skillInstructions: [
+    "Use Dench CRM records, native enrichment, web search, and user-provided files as the baseline source set; use connected apps only when they add relevant authorized context.",
+    "Cite every material factual claim, including company size, funding, leadership, customers, pricing, news, market position, and risks.",
+    "Prefer primary and high-quality sources such as company websites, filings, official blogs, reputable news, customer evidence, and supplied files.",
+    "Do not invent facts; if sources conflict, cite both sides, explain the conflict, and mark the field unresolved.",
+    "Structure the brief around the user's decision with executive summary, evidence-backed sections, risks or unknowns, recommendations, and sources.",
+    "Keep private CRM, email, Slack, and file excerpts scoped to the requested business purpose and visible audience.",
+  ],
 });

@@ -1,13 +1,83 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const fundraisingTargetBuilder = createSkillTemplate({
+export const fundraisingTargetBuilder = defineSkillTemplate({
   id: "fundraising-target-builder",
   title: "Fundraising Target Builder",
   summary: "Build and maintain a prioritized investor target list for a fundraise.",
   category: "Run Founder Ops",
   outcome: "Maps investor fit, enriches partners, finds warm paths, ranks targets, and creates investor CRM records.",
+  userUseCase: "Use when a founder is preparing or maintaining a fundraise target list and wants DenchClaw to find, enrich, rank, and track relevant investors. The skill should identify fund-stage fit, partner ownership, portfolio conflicts, warm paths, and the next action that moves each investor forward.",
   personas: ["Founder", "Investor/BD"],
   requiredApps: [externalApps.gmail, externalApps.notion],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["round details", "investor filters", "warm paths", "ranking criteria"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "round-context",
+      prompt: "What fundraising context should guide the target list?",
+      required: true,
+      freeformHint: "Include round type, target raise, stage, geography, timing, traction, check size, and any investor exclusions.",
+    },
+    {
+      id: "investor-fit-criteria",
+      prompt: "Which investor fit criteria matter most?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "stage-fit", label: "Stage fit" },
+        { id: "sector-fit", label: "Sector fit" },
+        { id: "geo-fit", label: "Geo fit" },
+        { id: "check-size", label: "Check size" },
+        { id: "portfolio-synergy", label: "Portfolio synergy" },
+        { id: "can-lead", label: "Can lead" },
+      ],
+    },
+    {
+      id: "warm-path-sources",
+      prompt: "Where should the skill look for warm introduction paths?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "dench-crm", label: "Dench CRM" },
+        { id: "gmail", label: "Gmail" },
+        { id: "calendar", label: "Calendar" },
+        { id: "notion-files", label: "Notion/files" },
+        { id: "manual-network", label: "Manual network notes" },
+      ],
+    },
+    {
+      id: "crm-write-policy",
+      prompt: "How should investor targets be written to CRM?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "create-records", label: "Create records" },
+        { id: "add-research-notes", label: "Add research notes" },
+        { id: "create-intro-tasks", label: "Create intro tasks" },
+        { id: "rank-only", label: "Rank only" },
+        { id: "review-before-write", label: "Review before write" },
+      ],
+    },
+    {
+      id: "outputs",
+      prompt: "Which fundraising outputs should be prepared?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "founder-shortlist", label: "Founder shortlist" },
+        { id: "crm-import-plan", label: "CRM import plan" },
+        { id: "intro-drafts", label: "Intro request drafts" },
+        { id: "investor-memos", label: "Investor memos" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Use Dench CRM, native enrichment, web search, and files to build investor evidence; optionally use Gmail, Calendar, HubSpot, Notion, and Slack for prior interactions, warm paths, and notes.",
+    "Support only manual list-building runs and cron-scheduled refreshes; do not assume investor news or CRM update webhooks.",
+    "Deduplicate investors, firms, partners, domains, prior targets, and active fundraising opportunities before creating records or tasks.",
+    "Score each investor with stage fit, sector fit, check-size fit, portfolio relevance, warm-path strength, and timing rationale.",
+    "Follow the CRM write policy: create or update investor records only when allowed, use additive sourced research notes, and avoid overwriting owner-entered stages, rankings, or relationship fields.",
+    "Alert the founder when a high-fit investor has a strong warm path, recent relevant activity, or a time-sensitive reason to engage.",
+    "Produce a founder-ranked shortlist, operator CRM write plan, intro-request drafts, and investor-specific research memos.",
+  ],
 });

@@ -1,13 +1,81 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const customerVoiceMiner = createSkillTemplate({
+export const customerVoiceMiner = defineSkillTemplate({
   id: "customer-voice-miner",
   title: "Customer Voice Miner",
   summary: "Mine calls, notes, tickets, and messages for themes in customer language.",
   category: "Research Anything",
   outcome: "Extracts recurring pains, objections, feature requests, quotes, and messaging insights from customer-facing context.",
+  userUseCase: "Use this when product, founder, CS, or GTM teams need customer truth from CRM notes, transcripts, support notes, reviews, Slack threads, Notion docs, Gmail, or uploaded research. The skill should turn messy qualitative material into cited themes, quotes, objections, product gaps, and messaging recommendations without exposing unnecessary private details.",
   personas: ["Founder", "Customer Success", "Sales"],
   requiredApps: [externalApps.slack, externalApps.notion],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["source set", "themes to mine", "quote rules", "destination"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "source-material",
+      prompt: "Where should customer voice be mined from?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "crm", label: "CRM notes" },
+        { id: "files", label: "Uploaded files" },
+        { id: "gmail", label: "Gmail" },
+        { id: "slack", label: "Slack" },
+        { id: "notion", label: "Notion" },
+        { id: "web", label: "Public reviews" },
+      ],
+    },
+    {
+      id: "customer-segment",
+      prompt: "Which customer segment, account set, lifecycle stage, or date range should be analyzed?",
+      required: true,
+      freeformHint: "Name the CRM segment, accounts, product line, market, or source date range.",
+    },
+    {
+      id: "themes",
+      prompt: "Which themes should the analysis extract?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "pain", label: "Pain points" },
+        { id: "objections", label: "Objections" },
+        { id: "features", label: "Feature requests" },
+        { id: "value", label: "Value drivers" },
+        { id: "churn", label: "Churn risk" },
+        { id: "language", label: "Exact language" },
+      ],
+    },
+    {
+      id: "cadence",
+      prompt: "Should this be a manual analysis or a recurring customer voice digest?",
+      required: true,
+      options: [
+        { id: "manual", label: "Manual analysis" },
+        { id: "weekly", label: "Weekly digest" },
+        { id: "monthly", label: "Monthly digest" },
+      ],
+    },
+    {
+      id: "output-format",
+      prompt: "What output format should the report use?",
+      required: true,
+      options: [
+        { id: "brief", label: "Executive brief" },
+        { id: "theme-table", label: "Theme table" },
+        { id: "backlog", label: "Product backlog" },
+        { id: "messaging", label: "Messaging doc" },
+      ],
+      freeformHint: "Include destination, audience, and whether quotes may include account names.",
+    },
+  ],
+  skillInstructions: [
+    "Use only customer data available to the requesting user through Dench CRM, local files, and connected apps.",
+    "Cite each theme with source references, dates, account or segment context, and representative quotes where permitted.",
+    "Redact sensitive personal data unless necessary for the requested business purpose and avoid exposing private email or Slack content beyond relevant excerpts.",
+    "Group similar feedback into themes, quantify frequency when possible, and avoid overstating conclusions from small samples.",
+    "Preserve exact customer language for quoted evidence while clearly separating quotes from paraphrased analysis.",
+    "Prioritize recent, direct, high-context sources such as call transcripts, customer emails, CRM notes, support notes, and uploaded research files.",
+    "Format the output as Summary, Theme Table, Representative Quotes, Segment Differences, Recommendations, Open Questions, and Sources.",
+  ],
 });

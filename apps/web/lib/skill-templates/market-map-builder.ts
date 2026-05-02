@@ -1,13 +1,83 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const marketMapBuilder = createSkillTemplate({
+export const marketMapBuilder = defineSkillTemplate({
   id: "market-map-builder",
   title: "Market Map Builder",
   summary: "Map a market into segments, players, signals, and open opportunities.",
   category: "Research Anything",
   outcome: "Builds and updates a market map with categories, companies, trends, funding, customer segments, and strategic takeaways.",
+  userUseCase: "Use this when a founder, investor, BD lead, or strategy operator needs a cited map of a market, category, or problem space. The skill should discover companies, segment them cleanly, capture evidence, and expose whitespace without forcing uncertain companies into tidy boxes.",
   personas: ["Founder", "Investor/BD", "Knowledge Worker"],
   requiredApps: [externalApps.notion],
   triggerModes: ["manual"],
-  focusAreas: ["market boundaries", "segmentation", "signals", "save location"],
+  autonomy: "Updates CRM",
+  interviewQuestions: [
+    {
+      id: "market-scope",
+      prompt: "What market, category, or problem space should be mapped?",
+      required: true,
+      freeformHint: "Describe the market, keywords, geographies, customer segments, or source documents.",
+    },
+    {
+      id: "map-goal",
+      prompt: "What decision should this market map support?",
+      required: true,
+      options: [
+        { id: "sales", label: "Find target accounts" },
+        { id: "strategy", label: "Understand landscape" },
+        { id: "partnerships", label: "Find partners" },
+        { id: "investment", label: "Evaluate targets" },
+        { id: "hiring", label: "Talent landscape" },
+      ],
+    },
+    {
+      id: "company-criteria",
+      prompt: "Which company attributes should be captured?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "size", label: "Size and stage" },
+        { id: "geo", label: "Geography" },
+        { id: "buyers", label: "Target buyers" },
+        { id: "funding", label: "Funding or ownership" },
+        { id: "positioning", label: "Positioning" },
+        { id: "signals", label: "Growth signals" },
+      ],
+    },
+    {
+      id: "source-policy",
+      prompt: "Which sources should be used and trusted most?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "web", label: "Public web" },
+        { id: "enrichment", label: "Native enrichment" },
+        { id: "crm", label: "Dench CRM" },
+        { id: "files", label: "Uploaded files" },
+        { id: "linkedin", label: "LinkedIn" },
+        { id: "notion-slack", label: "Notion or Slack" },
+      ],
+    },
+    {
+      id: "output-format",
+      prompt: "How should the map be delivered?",
+      required: true,
+      options: [
+        { id: "brief", label: "Research brief" },
+        { id: "table", label: "Structured table" },
+        { id: "notion-database", label: "Notion database" },
+        { id: "crm-list", label: "CRM list" },
+      ],
+      freeformHint: "Specify columns, grouping logic, ranking criteria, and destination.",
+    },
+  ],
+  skillInstructions: [
+    "Define the market boundaries before collecting companies, including what is intentionally out of scope.",
+    "Build the map from Dench CRM, native enrichment, web search, and supplied files; use connected Notion, Slack, Gmail, Calendar, or LinkedIn only when they add relevant context.",
+    "Cite each included company and material attribute with primary or reputable sources.",
+    "Assign companies to clear categories and explain ambiguous classifications instead of forcing weak fits.",
+    "Include confidence levels for company fit, market category, and important inferred attributes.",
+    "Deliver Market Definition, Category Taxonomy, Company Table, Segment Insights, Whitespace, Risks/Unknowns, and Sources.",
+    "If saving to CRM or Notion, write additive records with source attribution and avoid overwriting user-authored notes.",
+  ],
 });

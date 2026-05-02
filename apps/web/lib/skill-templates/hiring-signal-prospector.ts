@@ -1,6 +1,6 @@
-import { createSkillTemplate } from "./create-template";
+import { defineSkillTemplate } from "./create-template";
 
-export const hiringSignalProspector = createSkillTemplate({
+export const hiringSignalProspector = defineSkillTemplate({
   id: "hiring-signal-prospector",
   title: "Hiring Signal Prospector",
   summary: "Spot companies hiring for roles that reveal urgency for your product.",
@@ -9,5 +9,74 @@ export const hiringSignalProspector = createSkillTemplate({
   personas: ["Founder", "Sales"],
   requiredApps: [],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["job titles", "hiring thresholds", "decision-maker roles", "signal evidence"],
+  autonomy: "Can automate",
+  userUseCase: "Use this when hiring activity is a buying-intent signal: companies adding sales reps, RevOps, security, support, finance, or other roles that reveal a new operational pain. The skill should find companies hiring for the right jobs, interpret what that implies, identify likely buyers, and turn the signal into CRM-ready prospecting action.",
+  interviewQuestions: [
+    {
+      id: "hiring-roles",
+      prompt: "Which open roles or departments should signal demand?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "sales", label: "Sales roles" },
+        { id: "revops", label: "RevOps roles" },
+        { id: "security", label: "Security roles" },
+        { id: "support", label: "Support roles" },
+        { id: "engineering", label: "Engineering roles" },
+      ],
+      freeformHint: "Include exact titles, seniority, departments, or phrases from job descriptions.",
+    },
+    {
+      id: "intent-meaning",
+      prompt: "What should those hiring signals imply about business need?",
+      required: true,
+      options: [
+        { id: "new-team", label: "Building a new team" },
+        { id: "scale-capacity", label: "Scaling capacity" },
+        { id: "manual-work", label: "Replacing manual work" },
+        { id: "compliance", label: "Compliance push" },
+        { id: "market-expansion", label: "Market expansion" },
+      ],
+    },
+    {
+      id: "company-scope",
+      prompt: "Which company types, regions, or size ranges should be searched?",
+      required: true,
+      freeformHint: "Example: Series B-C SaaS in North America with 100-1000 employees.",
+    },
+    {
+      id: "signal-strength",
+      prompt: "Which hiring patterns should receive higher priority?",
+      required: false,
+      allowMultiple: true,
+      options: [
+        { id: "multiple-openings", label: "Multiple similar roles" },
+        { id: "new-leader", label: "New leadership role" },
+        { id: "tool-mentions", label: "Tool mentions" },
+        { id: "urgent-language", label: "Urgent language" },
+        { id: "new-market", label: "New market role" },
+      ],
+    },
+    {
+      id: "contact-strategy",
+      prompt: "Who should be contacted when a strong hiring signal is found?",
+      required: true,
+      options: [
+        { id: "hiring-manager", label: "Hiring manager" },
+        { id: "department-exec", label: "Department exec" },
+        { id: "ops-leader", label: "Ops leader" },
+        { id: "founder", label: "Founder" },
+        { id: "finance", label: "Finance approver" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Search public job postings, company career pages, enrichment data, and CRM context for hiring signals that match the requested roles.",
+    "Group related openings by company to detect team-level growth rather than isolated one-off roles.",
+    "Interpret job descriptions for buying intent, tool mentions, department priorities, urgency, and timing cues.",
+    "Prioritize companies where hiring activity maps directly to the user's product thesis and target buyer.",
+    "Exclude companies already owned by active CRM opportunities unless the user explicitly wants them reviewed.",
+    "Return each prospect with relevant job links, signal interpretation, likely buyer, recommended contact path, and CRM-safe source notes.",
+    "For scheduled runs, dedupe against prior findings and only surface new or materially changed hiring signals since the last run.",
+  ],
 });

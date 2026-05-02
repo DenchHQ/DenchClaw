@@ -1,13 +1,91 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const investorUpdateBuilder = createSkillTemplate({
+export const investorUpdateBuilder = defineSkillTemplate({
   id: "investor-update-builder",
   title: "Investor Update Builder",
   summary: "Draft crisp investor updates from company context, asks, and metrics.",
   category: "Run Founder Ops",
   outcome: "Gathers wins, metrics, asks, risks, and narrative context into a polished investor update draft or send-ready email.",
+  userUseCase:
+    "Use when a founder needs a credible investor update assembled from metrics, customer progress, risks, asks, and prior investor context. It should create audience-specific drafts from trusted sources while keeping sensitive working notes private.",
   personas: ["Founder", "Investor/BD"],
   requiredApps: [externalApps.gmail, externalApps.notion, externalApps.hubspot],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["audience", "sections", "source docs", "send policy"],
+  autonomy: "Creates drafts",
+  interviewQuestions: [
+    {
+      id: "update-audience",
+      prompt: "Who is this investor update for?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "current-investors", label: "Current investors" },
+        { id: "prospective-investors", label: "Prospective investors" },
+        { id: "advisors", label: "Advisors" },
+        { id: "board", label: "Board" },
+        { id: "internal-only", label: "Internal only" },
+      ],
+    },
+    {
+      id: "update-sections",
+      prompt: "Which sections should the update include?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "headline", label: "Headline" },
+        { id: "metrics", label: "Metrics" },
+        { id: "wins", label: "Wins" },
+        { id: "challenges", label: "Challenges" },
+        { id: "asks", label: "Asks" },
+        { id: "customer-proof", label: "Customer proof" },
+        { id: "runway", label: "Runway" },
+      ],
+    },
+    {
+      id: "source-priority",
+      prompt: "Which sources should the skill use for facts and metrics?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "files", label: "Files" },
+        { id: "notion", label: "Notion" },
+        { id: "crm", label: "Dench CRM" },
+        { id: "hubspot", label: "HubSpot" },
+        { id: "gmail-calendar", label: "Gmail/Calendar" },
+        { id: "manual-context", label: "Manual context" },
+      ],
+    },
+    {
+      id: "send-policy",
+      prompt: "How should the skill handle sending?",
+      required: true,
+      options: [
+        { id: "draft-only", label: "Draft only" },
+        { id: "approval-required", label: "Approval required" },
+        { id: "send-ready-copy", label: "Send-ready copy" },
+        { id: "manual-export", label: "Manual export" },
+      ],
+    },
+    {
+      id: "crm-write-policy",
+      prompt: "What investor CRM updates should be allowed?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "log-update", label: "Log update" },
+        { id: "create-followups", label: "Create follow-ups" },
+        { id: "tag-audience", label: "Tag audience" },
+        { id: "no-write", label: "No writes" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Use files, Notion, Dench CRM, HubSpot, Gmail, Calendar, and manual context only as configured sources for metrics, wins, risks, asks, and prior investor commitments.",
+    "Separate facts from narrative; cite the source for every metric, customer proof point, runway claim, hiring update, and investor ask that influences the draft.",
+    "Create audience-specific versions such as private founder notes, current-investor update, prospective-investor version, board-safe version, and follow-up task list.",
+    "Follow the send and CRM write policies exactly: default to drafts, log updates only when approved, use additive notes with attribution, and never overwrite investor relationship fields without permission.",
+    "Alert the founder when required metrics are missing, asks are vague, sensitive claims lack support, or an investor-specific follow-up should be handled separately.",
+    "For scheduled preparation, key drafts, source windows, logged updates, and follow-up tasks to the update period so repeated runs update the same artifact instead of creating duplicates.",
+    "Use a founder voice that is clear, candid, optimistic without hype, specific about asks, and honest about risks and unknowns.",
+  ],
 });

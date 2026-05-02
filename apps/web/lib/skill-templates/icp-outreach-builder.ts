@@ -1,13 +1,71 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const icpOutreachBuilder = createSkillTemplate({
+export const icpOutreachBuilder = defineSkillTemplate({
   id: "icp-outreach-builder",
   title: "ICP Outreach Builder",
   summary: "Build a guardrailed outbound skill from an ICP, offer, and send policy.",
   category: "Find Leads",
   outcome: "Researches ICP-matched leads, writes personalized messages, follows the configured send policy, and logs activity to CRM.",
+  userUseCase: "Use when a founder or seller knows the customer profile and offer but needs DenchClaw to turn that into a repeatable prospecting skill. The workflow should find accounts and people with Dench-native CRM, enrichment, and web research, draft outreach grounded in evidence, and only send when explicit rules exist.",
   personas: ["Founder", "Sales"],
   requiredApps: [externalApps.gmail, externalApps.hubspot],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["ICP and buyer persona", "offer and CTA", "send rules", "follow-up cadence"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "icp-definition",
+      prompt: "What ICP should this outreach skill target?",
+      required: true,
+      freeformHint: "Include industry, geography, size, buyer pain, maturity, and exclusions.",
+    },
+    {
+      id: "buyer-personas",
+      prompt: "Which buyer personas should DenchClaw research at each account?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "founder", label: "Founder/CEO" },
+        { id: "sales-leader", label: "Sales leader" },
+        { id: "revops", label: "RevOps" },
+        { id: "marketing", label: "Marketing" },
+        { id: "custom", label: "Custom role" },
+      ],
+      freeformHint: "List exact titles, seniority, and backup personas.",
+    },
+    {
+      id: "offer-and-cta",
+      prompt: "What offer, pain, and CTA should the outreach connect to?",
+      required: true,
+      freeformHint: "Describe the product, promise, proof, call to action, and phrases to avoid.",
+    },
+    {
+      id: "personalization-evidence",
+      prompt: "Which evidence should drive personalization?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "company-news", label: "Company news" },
+        { id: "hiring", label: "Hiring" },
+        { id: "funding", label: "Funding" },
+        { id: "crm-history", label: "CRM history" },
+        { id: "website-positioning", label: "Website positioning" },
+        { id: "tech-stack", label: "Tech stack" },
+      ],
+    },
+    {
+      id: "send-policy",
+      prompt: "What are the send, follow-up, quiet-hour, and stop rules?",
+      required: true,
+      freeformHint: "Include draft vs auto-send, daily caps, allowlists, follow-up spacing, reply detection, meeting booked, do-not-contact, and CRM stage stops.",
+    },
+  ],
+  skillInstructions: [
+    "Translate the ICP into concrete account, contact, exclusion, and evidence rules before searching.",
+    "Use Dench CRM, native enrichment, Apollo-style native data, web search, HubSpot context, and Gmail history to find and prioritize accounts; never require Apollo as an external app.",
+    "For each lead, capture account fit, buyer-persona rationale, source links, personalization evidence, and confidence.",
+    "Write outreach that is concise, specific, and tied to observable evidence; do not fabricate familiarity, private details, or unsupported claims.",
+    "Default to drafts unless the user approves explicit send rules; enforce caps, quiet hours, dedupe, stop conditions, and CRM do-not-contact fields before sending.",
+    "For scheduled runs, make each campaign idempotent by checking prior Dench runs, Gmail history, and CRM notes before creating new drafts or sends.",
+    "Create the final SKILL.md with manual invocation examples, an exact scheduled message if enabled, CRM write fields, send policy, and a run summary format.",
+  ],
 });

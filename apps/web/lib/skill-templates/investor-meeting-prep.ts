@@ -1,13 +1,88 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const investorMeetingPrep = createSkillTemplate({
+export const investorMeetingPrep = defineSkillTemplate({
   id: "investor-meeting-prep",
   title: "Investor Meeting Prep",
   summary: "Research investors and assemble a sharp brief before fundraising meetings.",
   category: "Prep Meetings",
   outcome: "Researches investor background, portfolio, thesis, prior interactions, likely objections, and tailored talking points.",
+  userUseCase: "Prepare for investor, advisor, or fundraising meetings with a brief that connects calendar attendees, prior relationship history, portfolio fit, company narrative, and likely objections. It should help a founder walk into the meeting knowing what to emphasize, what not to claim, and what follow-up ask to make.",
   personas: ["Founder", "Investor/BD"],
   requiredApps: [externalApps.googleCalendar, externalApps.gmail, externalApps.notion],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["investor goal", "company narrative", "portfolio fit", "follow-up rules"],
+  autonomy: "Creates drafts",
+  interviewQuestions: [
+    {
+      id: "investor-meeting-goal",
+      prompt: "What is the goal of these investor meetings?",
+      required: true,
+      options: [
+        { id: "first-intro", label: "First intro" },
+        { id: "fundraising-pitch", label: "Fundraising pitch" },
+        { id: "follow-up-diligence", label: "Follow-up or diligence" },
+        { id: "advisor-board", label: "Advisor or board context" },
+        { id: "investor-update", label: "Investor update" },
+      ],
+    },
+    {
+      id: "research-scope",
+      prompt: "What should the investor brief research?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "firm-thesis", label: "Firm thesis" },
+        { id: "portfolio-fit", label: "Portfolio fit" },
+        { id: "partner-background", label: "Partner background" },
+        { id: "prior-interactions", label: "Prior interactions" },
+        { id: "likely-objections", label: "Likely objections" },
+        { id: "warm-intros", label: "Warm intros" },
+      ],
+    },
+    {
+      id: "source-of-truth",
+      prompt: "Where should company narrative and metrics come from?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "notion", label: "Notion" },
+        { id: "dench-crm", label: "Dench CRM" },
+        { id: "hubspot", label: "HubSpot" },
+        { id: "gmail", label: "Gmail" },
+        { id: "manual-context", label: "Manual context" },
+      ],
+      freeformHint: "Name the docs or CRM fields that contain approved positioning and metrics.",
+    },
+    {
+      id: "prep-timing",
+      prompt: "When should investor prep be generated?",
+      required: true,
+      options: [
+        { id: "day-before", label: "Day before" },
+        { id: "morning-of", label: "Morning of" },
+        { id: "one-hour-before", label: "1 hour before" },
+        { id: "manual-only", label: "Manual only" },
+      ],
+    },
+    {
+      id: "brief-destination",
+      prompt: "Where should the prep brief go?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "notion-page", label: "Notion page" },
+        { id: "gmail-draft", label: "Gmail draft" },
+        { id: "dench-chat", label: "Dench chat" },
+        { id: "calendar-note", label: "Calendar note" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Support manual prep for a selected investor or meeting and scheduled prep for qualifying calendar events only.",
+    "Use calendar attendees as the anchor, then combine Dench CRM relationship history, Gmail threads, HubSpot stages, Notion narrative sources, and Dench enrichment.",
+    "Attribute investor facts, portfolio claims, prior interactions, CRM status, and company metrics to their sources with freshness and confidence.",
+    "Never invent fundraising metrics, commitments, terms, or investor interest; use only approved Notion, CRM, file, or user-provided context.",
+    "Deliver a brief with investor background, relationship history, portfolio fit, likely objections, tailored talking points, and follow-up suggestions.",
+    "Default to read-only prep; if writing notes, use additive CRM or Notion entries with source attribution and no overwrites.",
+    "For scheduled runs, skip events already briefed unless attendee, CRM, Gmail, or Notion context materially changed.",
+  ],
 });

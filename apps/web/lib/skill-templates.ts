@@ -53,7 +53,9 @@ export {
   type SkillTemplateAutonomy,
   type SkillTemplateCategory,
   type SkillTemplateId,
+  type SkillTemplateInterviewQuestion,
   type SkillTemplatePersona,
+  type SkillTemplateQuestionOption,
   type SkillTemplateTriggerMode,
 } from "./skill-templates/types";
 

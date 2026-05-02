@@ -1,13 +1,83 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const pipelineHygieneDigest = createSkillTemplate({
+export const pipelineHygieneDigest = defineSkillTemplate({
   id: "pipeline-hygiene-digest",
   title: "Pipeline Hygiene Digest",
   summary: "Send a digest of stale deals, missing next steps, and risky CRM gaps.",
   category: "Keep CRM Clean",
   outcome: "Audits pipeline records, surfaces the highest-impact hygiene issues, and posts action-oriented cleanup recommendations.",
+  userUseCase: "Use this before forecast reviews or on a recurring schedule to audit Dench CRM and HubSpot pipeline data for stale deals, missing next steps, bad close dates, weak attribution, and owner-specific cleanup work.",
   personas: ["Founder", "Sales", "RevOps"],
   requiredApps: [externalApps.hubspot, externalApps.slack],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["pipeline stages", "stale thresholds", "digest destination", "write permissions"],
+  autonomy: "Updates CRM",
+  interviewQuestions: [
+    {
+      id: "pipeline-scope",
+      prompt: "Which pipeline records should be audited?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "all-open-pipeline", label: "All open pipeline" },
+        { id: "owned-deals", label: "Deals I own" },
+        { id: "forecast-period", label: "Current forecast" },
+        { id: "late-stage", label: "Late stage" },
+        { id: "named-view", label: "Named CRM view" },
+      ],
+      freeformHint: "Name the Dench CRM view, HubSpot pipeline, owners, stages, or forecast period.",
+    },
+    {
+      id: "hygiene-checks",
+      prompt: "Which hygiene problems should the digest flag?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "stale-next-step", label: "Stale next step" },
+        { id: "bad-close-date", label: "Bad close date" },
+        { id: "missing-core-fields", label: "Missing fields" },
+        { id: "no-recent-activity", label: "No recent activity" },
+        { id: "missing-attribution", label: "Missing attribution" },
+        { id: "handoff-risk", label: "Handoff risk" },
+      ],
+    },
+    {
+      id: "stale-thresholds",
+      prompt: "What stale thresholds should apply by stage?",
+      required: true,
+      freeformHint: "Example: discovery 14 days, proposal 7 days, negotiation 3 days, missing next step always flagged.",
+    },
+    {
+      id: "write-policy",
+      prompt: "Should the skill only report issues, or write safe cleanup artifacts too?",
+      required: true,
+      options: [
+        { id: "digest-only", label: "Digest only" },
+        { id: "write-safe-fields", label: "Write hygiene fields" },
+        { id: "create-tasks", label: "Create owner tasks" },
+        { id: "review-before-write", label: "Review before write" },
+      ],
+    },
+    {
+      id: "delivery",
+      prompt: "When and where should the hygiene digest be delivered?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "slack", label: "Slack" },
+        { id: "gmail", label: "Gmail" },
+        { id: "dench-summary", label: "Dench summary" },
+        { id: "manual-only", label: "Manual only" },
+      ],
+      freeformHint: "Include cron cadence, timezone, recipients, and whether owners need separate sections.",
+    },
+  ],
+  skillInstructions: [
+    "Support manual audits and cron/scheduled digest runs only; do not rely on CRM deal-change webhooks.",
+    "Audit Dench CRM first and reconcile HubSpot fields when connected, preserving external record IDs and source attribution.",
+    "Flag each issue with severity, owner, affected field, evidence, recommended fix, and confidence.",
+    "Only write safe hygiene fields or owner tasks when configured; never overwrite amount, stage, owner, close date, or user-authored forecast notes without explicit approval.",
+    "Use configured stale thresholds by stage, and keep missing next step, missing attribution, and no recent activity as separate explainable findings.",
+    "Make scheduled digests idempotent by suppressing unchanged findings already reported within the configured window.",
+    "Deliver a concise digest with executive summary, owner sections, top risks, blocked writes, and low-confidence findings.",
+  ],
 });

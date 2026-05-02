@@ -1,13 +1,85 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const boardMeetingPrep = createSkillTemplate({
+export const boardMeetingPrep = defineSkillTemplate({
   id: "board-meeting-prep",
   title: "Board Meeting Prep",
   summary: "Assemble board prep packets, open questions, risks, and follow-up actions.",
   category: "Run Founder Ops",
   outcome: "Gathers metrics, narrative updates, decisions needed, risks, and prior commitments into a board-ready brief.",
+  userUseCase:
+    "Use this when a founder or operator needs a repeatable way to assemble board prep from files, Notion, CRM, metrics, inbox context, meeting history, and prior commitments. The skill should create board-ready materials while keeping private founder notes separate from board-safe output.",
   personas: ["Founder", "Operator"],
   requiredApps: [externalApps.googleCalendar, externalApps.gmail, externalApps.notion],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["meeting date", "required sections", "metrics source", "sensitive topics"],
+  autonomy: "Updates CRM",
+  interviewQuestions: [
+    {
+      id: "meeting-context",
+      prompt: "What board meeting should this prep target?",
+      required: true,
+      freeformHint: "Include meeting date, board members, observers, format, and prep deadline.",
+    },
+    {
+      id: "packet-sections",
+      prompt: "Which sections should the board packet include?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "metrics", label: "Metrics" },
+        { id: "wins", label: "Wins" },
+        { id: "risks", label: "Risks" },
+        { id: "decisions-needed", label: "Decisions needed" },
+        { id: "hiring", label: "Hiring" },
+        { id: "fundraising", label: "Fundraising" },
+        { id: "customer-pipeline", label: "Customer/pipeline" },
+      ],
+    },
+    {
+      id: "source-priority",
+      prompt: "Which sources should be treated as authoritative?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "files", label: "Files" },
+        { id: "notion", label: "Notion" },
+        { id: "crm", label: "Dench CRM" },
+        { id: "hubspot", label: "HubSpot" },
+        { id: "gmail-calendar", label: "Gmail/Calendar" },
+        { id: "slack", label: "Slack" },
+      ],
+    },
+    {
+      id: "audience-versions",
+      prompt: "Which audience-specific versions should be created?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "founder-private", label: "Founder private" },
+        { id: "board-packet", label: "Board packet" },
+        { id: "exec-team", label: "Exec team" },
+        { id: "follow-up-list", label: "Follow-up list" },
+      ],
+    },
+    {
+      id: "write-policy",
+      prompt: "What may be written back after prep?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "no-write", label: "No writes" },
+        { id: "customer-risk-notes", label: "Customer risk notes" },
+        { id: "owner-tasks", label: "Owner tasks" },
+        { id: "board-followups", label: "Board follow-ups" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Use Dench files, CRM, enrichment, and web search as default context; use Gmail, Calendar, Notion, HubSpot, and Slack for prior commitments, meeting logistics, source docs, and sensitive context when connected.",
+    "Support manual packet prep and scheduled prep reminders only; do not rely on calendar webhooks or automatic document callbacks.",
+    "Tie scheduled outputs to the board meeting date and packet version, updating the same draft or checklist instead of creating duplicates.",
+    "Keep private founder prep, exec-team action lists, and board-safe packets separate so sensitive working notes do not leak into external materials.",
+    "Respect the write policy: add sourced notes or tasks only when allowed, avoid overwriting CRM fields, and keep board-sensitive commentary out of customer-visible records.",
+    "Alert owners for missing metrics, unresolved prior board commitments, unclear decision owners, or customer/revenue risks that need executive input before the meeting.",
+    "Use a board-ready tone: clear, candid, numbers-aware, and explicit about decisions, tradeoffs, risks, and asks.",
+  ],
 });

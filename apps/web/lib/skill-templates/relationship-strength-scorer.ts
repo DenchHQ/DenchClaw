@@ -1,13 +1,85 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const relationshipStrengthScorer = createSkillTemplate({
+export const relationshipStrengthScorer = defineSkillTemplate({
   id: "relationship-strength-scorer",
   title: "Relationship Strength Scorer",
   summary: "Score relationships from recent emails, meetings, roles, and momentum.",
   category: "Keep CRM Clean",
   outcome: "Updates relationship strength, recency, confidence, and next-action fields across important contacts and accounts.",
+  userUseCase: "Use this when founders, sellers, investor-relations owners, or RevOps teams need Dench CRM relationship strength to reflect actual recent interaction instead of stale gut feel. The skill scores named accounts, investors, partners, customers, or open opportunities from Gmail, Calendar, CRM history, and enrichment context.",
   personas: ["Founder", "Sales", "Investor/BD", "RevOps"],
   requiredApps: [externalApps.gmail, externalApps.googleCalendar],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["scored segments", "signal weights", "score scale", "CRM fields"],
+  autonomy: "Updates CRM",
+  interviewQuestions: [
+    {
+      id: "scoring-scope",
+      prompt: "Which relationships should be scored?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "key-accounts", label: "Key accounts" },
+        { id: "open-opportunities", label: "Open opportunities" },
+        { id: "investors-partners", label: "Investors/partners" },
+        { id: "customer-contacts", label: "Customer contacts" },
+        { id: "named-list", label: "Named list" },
+      ],
+      freeformHint: "Name CRM views, owners, stages, account tiers, or specific companies.",
+    },
+    {
+      id: "signal-sources",
+      prompt: "Which interaction sources should contribute to the score?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "gmail", label: "Gmail", description: "Recency, reply balance, thread depth, unresolved asks." },
+        { id: "calendar", label: "Calendar", description: "Meetings, attendance, cancellations, next touch." },
+        { id: "dench-crm", label: "Dench CRM", description: "Native activities, tags, stage, owner, notes." },
+        { id: "enrichment", label: "Enrichment", description: "Role seniority, company importance, public context." },
+      ],
+    },
+    {
+      id: "score-scale",
+      prompt: "What score scale should the skill write or report?",
+      required: true,
+      options: [
+        { id: "one-to-five", label: "1-5" },
+        { id: "zero-to-one-hundred", label: "0-100" },
+        { id: "weak-warm-strong", label: "Weak/Warm/Strong" },
+        { id: "draft-only", label: "Draft only" },
+      ],
+    },
+    {
+      id: "confidence-policy",
+      prompt: "When should relationship scores update CRM automatically?",
+      required: true,
+      options: [
+        { id: "write-85", label: "85%+ confidence" },
+        { id: "write-90", label: "90%+ confidence" },
+        { id: "review-changes", label: "Review all changes" },
+      ],
+      freeformHint: "Mention fields to protect, who reviews conflicts, and how stale manual scores should be handled.",
+    },
+    {
+      id: "next-action-policy",
+      prompt: "What should happen when an important relationship is weak or stale?",
+      required: true,
+      options: [
+        { id: "crm-task", label: "Create CRM task" },
+        { id: "digest-recommendation", label: "Add to digest" },
+        { id: "gmail-draft", label: "Draft follow-up" },
+        { id: "score-only", label: "Score only" },
+      ],
+      freeformHint: "Include stale thresholds, destination, and daily or weekly schedule if needed.",
+    },
+  ],
+  skillInstructions: [
+    "Support manual scoring for selected records and scheduled scoring for configured CRM segments only.",
+    "Use Dench CRM as the relationship record, with Gmail, Calendar, and enrichment signals as attributed evidence sources.",
+    "Compute scores from recency, reply balance, meeting attendance, stakeholder seniority, account importance, sentiment, and unresolved asks according to the configured weights.",
+    "Write CRM scores only when confidence meets the selected threshold, including evidence, source attribution, calculation timestamp, and score rationale.",
+    "Do not overwrite a user-authored relationship score unless explicitly allowed; otherwise create a proposed score with conflict details.",
+    "For weak or stale high-value relationships, create only the configured next action type and include the manual invocation or cron schedule that produced it.",
+    "Report score changes, blocked overwrites, low-confidence records, and recommended follow-ups after every run.",
+  ],
 });

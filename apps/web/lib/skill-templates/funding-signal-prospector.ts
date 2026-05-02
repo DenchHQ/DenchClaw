@@ -1,13 +1,82 @@
-import { createSkillTemplate } from "./create-template";
+import { defineSkillTemplate } from "./create-template";
 
-export const fundingSignalProspector = createSkillTemplate({
+export const fundingSignalProspector = defineSkillTemplate({
   id: "funding-signal-prospector",
   title: "Funding Signal Prospector",
   summary: "Find newly funded companies that match your ICP and likely need help now.",
   category: "Find Leads",
   outcome: "Monitors funding signals, filters against ICP rules, enriches contacts, and creates time-sensitive CRM opportunities.",
+  userUseCase: "Use this when a founder or seller wants a repeatable prospecting workflow around recent funding events. The skill should find companies that match a target market, verify funding from credible sources, infer why the event creates urgency, and turn the signal into CRM-ready account research and outreach angles.",
   personas: ["Founder", "Sales"],
   requiredApps: [],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["funding stages", "trigger thesis", "freshness window", "CRM handoff"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "funding-stage",
+      prompt: "Which funding stages should count as a prospecting signal?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "pre-seed-seed", label: "Pre-seed/seed" },
+        { id: "series-a-b", label: "Series A/B" },
+        { id: "series-c-plus", label: "Series C+" },
+        { id: "growth-pe", label: "Growth/PE" },
+        { id: "debt-ma", label: "Debt or M&A" },
+      ],
+    },
+    {
+      id: "freshness-window",
+      prompt: "How fresh should the funding event be?",
+      required: true,
+      options: [
+        { id: "30-days", label: "30 days" },
+        { id: "90-days", label: "90 days" },
+        { id: "6-months", label: "6 months" },
+        { id: "12-months", label: "12 months" },
+      ],
+    },
+    {
+      id: "company-filters",
+      prompt: "Which company profiles should be included after the funding filter?",
+      required: true,
+      freeformHint: "Describe industries, geographies, employee ranges, business models, or customer segments.",
+    },
+    {
+      id: "spend-trigger",
+      prompt: "What post-funding motion makes these companies worth contacting?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "sales-hiring", label: "Sales hiring" },
+        { id: "marketing-expansion", label: "Marketing expansion" },
+        { id: "engineering-growth", label: "Engineering growth" },
+        { id: "international-expansion", label: "International expansion" },
+        { id: "compliance-buildout", label: "Compliance buildout" },
+        { id: "new-product", label: "New product" },
+      ],
+    },
+    {
+      id: "crm-handoff",
+      prompt: "What should be written to CRM for each funded prospect?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "account-note", label: "Sourced account note" },
+        { id: "priority-score", label: "Priority score" },
+        { id: "contact-research", label: "Contact research" },
+        { id: "owner-task", label: "Owner task" },
+        { id: "draft-message", label: "Draft message" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Search public web sources and Dench-native enrichment for funding events that match the selected stage and freshness window.",
+    "Verify funding amount, date, stage, investors, and company identity from credible sources before including a company.",
+    "Filter funded companies through the requested ICP, exclusions, and CRM duplicate checks before ranking them.",
+    "Explain the likely post-funding spend trigger for each account and tie it to observable evidence.",
+    "Enrich each qualified account with domain, size, headquarters, relevant leaders, and source URLs.",
+    "Write only additive CRM notes, scores, tasks, or drafts with source attribution and confidence; do not overwrite user-authored fields.",
+    "For scheduled runs, suppress funding events already processed in earlier runs unless a materially new signal appears.",
+  ],
 });

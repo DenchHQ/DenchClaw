@@ -1,13 +1,81 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const lostCustomerWinback = createSkillTemplate({
+export const lostCustomerWinback = defineSkillTemplate({
   id: "lost-customer-winback",
   title: "Lost Customer Winback",
   summary: "Identify lost customers worth re-engaging and craft high-signal winback plays.",
   category: "Grow Customers",
   outcome: "Segments churned or closed-lost accounts, finds reactivation triggers, sends winback messages, and logs outcomes.",
+  userUseCase: "Use when a founder, CS lead, or sales owner wants to identify churned, dormant, or closed-lost customers worth re-engaging because something has changed: product improvements, new leadership, renewed pain, growth, or a still-warm relationship.",
   personas: ["Founder", "Customer Success", "Sales"],
   requiredApps: [externalApps.gmail, externalApps.hubspot],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["qualified lost accounts", "churn reasons", "new proof points", "contact rules"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "lost-customer-scope",
+      prompt: "Which lost accounts should this skill consider for winback?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "churned-customers", label: "Churned customers" },
+        { id: "closed-lost-opps", label: "Closed-lost opportunities" },
+        { id: "dormant-trials", label: "Dormant trials" },
+        { id: "inactive-free-users", label: "Inactive free users" },
+      ],
+      freeformHint: "Include lifecycle stages, date windows, exclusions, or minimum contract value.",
+    },
+    {
+      id: "winback-triggers",
+      prompt: "What makes a lost account worth re-engaging now?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "product-change", label: "Product change" },
+        { id: "new-leadership", label: "New leadership" },
+        { id: "funding-growth", label: "Funding or growth" },
+        { id: "renewed-need", label: "Renewed pain signal" },
+        { id: "warm-relationship", label: "Warm relationship" },
+      ],
+    },
+    {
+      id: "churn-context",
+      prompt: "Which churn, loss, or inactivity reasons should the agent respect before suggesting outreach?",
+      required: true,
+      freeformHint: "Mention pricing objections, missing features, bad fit, implementation issues, competitors, support history, or accounts that should never be contacted.",
+    },
+    {
+      id: "owner-approval",
+      prompt: "Who should approve or receive winback actions before any customer-facing message goes out?",
+      required: true,
+      options: [
+        { id: "account-owner", label: "Account owner" },
+        { id: "cs-owner", label: "CS owner" },
+        { id: "founder", label: "Founder" },
+        { id: "manual-review", label: "Review queue" },
+      ],
+    },
+    {
+      id: "output-policy",
+      prompt: "What should the skill create for each qualified winback account?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "owner-brief", label: "Owner brief" },
+        { id: "email-draft", label: "Email draft" },
+        { id: "crm-task", label: "CRM task" },
+        { id: "founder-digest", label: "Founder digest" },
+      ],
+      freeformHint: "Include send caps, quiet hours, approval rules, and CRM write permissions.",
+    },
+  ],
+  skillInstructions: [
+    "Use Dench CRM churn history, closed-lost notes, enrichment, web search, files, and connected Gmail or HubSpot context to understand why each account left before recommending re-engagement.",
+    "Prioritize accounts only when there is a credible reactivation reason tied to a product change, customer change, company signal, relationship warmth, or new offer.",
+    "Make scheduled runs idempotent by checking prior winback notes, tasks, draft messages, and recent outreach before creating anything new.",
+    "Follow the CRM write policy exactly: prefer additive notes with source links, timestamps, confidence, and rationale; never overwrite user-authored loss reasons or stages unless explicitly allowed.",
+    "Draft winback messages that acknowledge context lightly, avoid generic 'checking in' copy, and connect the account's old reason for leaving to a specific new reason to talk.",
+    "Alert the configured owner with the account, reactivation reason, risk caveats, and suggested next step before any customer-facing send unless explicit send rules allow automation.",
+    "Return audience-specific outputs: owner action briefs, founder-level pipeline impact summary, CRM-safe notes, and customer-facing drafts.",
+  ],
 });

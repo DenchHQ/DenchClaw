@@ -1,13 +1,87 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const renewalRiskDigest = createSkillTemplate({
+export const renewalRiskDigest = defineSkillTemplate({
   id: "renewal-risk-digest",
   title: "Renewal Risk Digest",
   summary: "Surface upcoming renewals with risk signals and action plans.",
   category: "Grow Customers",
   outcome: "Reviews accounts approaching renewal, identifies risks and champions, drafts owner actions, and logs readiness notes.",
+  userUseCase: "Use this when a founder, sales leader, or customer success owner wants a scheduled or manual digest of renewals that need attention before the deadline. The skill turns CRM dates, relationship activity, support context, email threads, meetings, and account notes into risk levels and concrete save actions.",
   personas: ["Customer Success", "Sales", "Founder"],
   requiredApps: [externalApps.hubspot, externalApps.gmail, externalApps.slack],
   triggerModes: ["scheduled", "manual"],
-  focusAreas: ["renewal window", "risk signals", "champion signals", "digest cadence"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "renewal-window",
+      prompt: "Which renewal window should the digest monitor?",
+      required: true,
+      options: [
+        { id: "30-days", label: "Next 30 days" },
+        { id: "60-days", label: "Next 60 days" },
+        { id: "90-days", label: "Next 90 days" },
+        { id: "custom", label: "Custom window" },
+      ],
+      freeformHint: "Include renewal-date fields, contract types, and exclusions.",
+    },
+    {
+      id: "risk-signals",
+      prompt: "Which renewal risk signals should be prioritized?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "low-engagement", label: "Low engagement" },
+        { id: "unresolved-issues", label: "Unresolved issues" },
+        { id: "champion-change", label: "Champion change" },
+        { id: "pricing-pressure", label: "Pricing pressure" },
+        { id: "no-mutual-plan", label: "No mutual plan" },
+      ],
+    },
+    {
+      id: "digest-audience",
+      prompt: "Who should receive the renewal digest?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "account-owners", label: "Account owners" },
+        { id: "founder", label: "Founder" },
+        { id: "cs-lead", label: "CS lead" },
+        { id: "sales-lead", label: "Sales lead" },
+      ],
+    },
+    {
+      id: "crm-write-policy",
+      prompt: "What renewal-related CRM writes are allowed?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "readiness-note", label: "Renewal note" },
+        { id: "risk-field", label: "Risk field" },
+        { id: "owner-task", label: "Owner task" },
+        { id: "forecast-suggestion", label: "Forecast suggestion" },
+        { id: "read-only", label: "Read-only" },
+      ],
+    },
+    {
+      id: "owner-alert-rules",
+      prompt: "When should the skill alert an owner outside the regular digest?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "high-risk", label: "High risk" },
+        { id: "deadline-close", label: "Deadline close" },
+        { id: "missing-owner", label: "Missing owner" },
+        { id: "exec-needed", label: "Exec help needed" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Read renewal dates, contract fields, account notes, relationship activity, support context, Gmail threads, Calendar meetings, and HubSpot data when connected.",
+    "Score risk with evidence for engagement, champion strength, unresolved issues, commercial pressure, missing mutual plan, and deadline proximity.",
+    "Make scheduled digests idempotent by keying findings to account, renewal period, risk reason, and run date; avoid duplicate owner tasks for unchanged risks.",
+    "Follow the CRM write policy exactly: add sourced readiness notes and tasks by default, include confidence and evidence, and ask before overwriting forecast or owner-authored risk fields.",
+    "Alert owners with account, renewal date, risk level, evidence, recommended save action, and explicit ask for founder or executive support when needed.",
+    "Produce audience-specific outputs: tactical owner action plan, founder revenue-at-risk summary, CS team digest, and CRM-safe renewal note.",
+    "Use a direct, numbers-aware tone that is honest about risk without dramatizing weak signals.",
+  ],
 });

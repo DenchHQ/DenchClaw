@@ -1,13 +1,80 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const websiteVisitorFollowUp = createSkillTemplate({
+export const websiteVisitorFollowUp = defineSkillTemplate({
   id: "website-visitor-follow-up",
   title: "Website Visitor Follow-up",
   summary: "Turn a pasted or synced visitor list into prioritized follow-up tasks and messages.",
   category: "Find Leads",
   outcome: "Accepts visitor or intent exports, matches accounts, prioritizes warm leads, drafts follow-ups, and logs next actions.",
+  userUseCase: "Turn a manual or scheduled website-visitor export into enriched account follow-up. The skill helps founders and sellers prioritize visitors by intent, match them to CRM records, research likely buyers, and create respectful follow-up actions without pretending DenchClaw has realtime site tracking.",
   personas: ["Founder", "Sales"],
   requiredApps: [externalApps.gmail],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["visitor data source", "priority pages", "matching rules", "send policy"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "visitor-source",
+      prompt: "Where will website visitor or intent data come from?",
+      required: true,
+      options: [
+        { id: "uploaded-csv", label: "Uploaded CSV" },
+        { id: "analytics-export", label: "Analytics export" },
+        { id: "campaign-export", label: "Campaign export" },
+        { id: "pasted-list", label: "Pasted list" },
+      ],
+      freeformHint: "Name the export, file shape, and fields available such as domain, page path, visit time, or company name.",
+    },
+    {
+      id: "intent-pages",
+      prompt: "Which pages or behaviors should signal buying interest?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "pricing", label: "Pricing" },
+        { id: "demo", label: "Demo page" },
+        { id: "integrations", label: "Integrations" },
+        { id: "comparison", label: "Comparison page" },
+        { id: "repeat-visits", label: "Repeat visits" },
+      ],
+    },
+    {
+      id: "matching-policy",
+      prompt: "How should visitor records be matched to CRM accounts and contacts?",
+      required: true,
+      options: [
+        { id: "domain", label: "Company domain" },
+        { id: "email-domain", label: "Email domain" },
+        { id: "company-name", label: "Company name" },
+        { id: "export-company-id", label: "Export company ID" },
+      ],
+      freeformHint: "Mention whether fuzzy matches should be reviewed before use.",
+    },
+    {
+      id: "follow-up-output",
+      prompt: "What follow-up should the skill produce?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "hot-account-list", label: "Hot account list" },
+        { id: "buyer-research", label: "Buyer research" },
+        { id: "gmail-drafts", label: "Gmail drafts" },
+        { id: "crm-tasks", label: "CRM tasks" },
+      ],
+    },
+    {
+      id: "send-guardrails",
+      prompt: "What send rules, quiet hours, and stop conditions should apply?",
+      required: true,
+      freeformHint: "Include draft vs send, daily caps, owner approval, reply detection, recent outreach cooldown, and do-not-contact rules.",
+    },
+  ],
+  skillInstructions: [
+    "Use only manual uploads, pasted lists, or scheduled export files; do not assume website webhooks, event listeners, or realtime visitor callbacks exist.",
+    "Normalize visitor records by company, domain, visit date, source, page path, and identity fields before matching to Dench CRM.",
+    "Score intent using configured page behavior, recency, repeat visits, CRM status, relationship history, and account fit.",
+    "Enrich matched companies and likely buyers with Dench-native enrichment, CRM history, web search, and Gmail context when connected.",
+    "Draft follow-up that references observed account-level interest carefully without implying a specific private person visited unless the export proves it.",
+    "Respect send guardrails, quiet hours, duplicate checks, owner approval, and do-not-contact exclusions before creating or sending any message.",
+    "Log visitor evidence, match confidence, recommended action, and any drafts or tasks additively in CRM with source attribution.",
+  ],
 });

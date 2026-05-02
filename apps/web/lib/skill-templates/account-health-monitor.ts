@@ -1,13 +1,89 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const accountHealthMonitor = createSkillTemplate({
+export const accountHealthMonitor = defineSkillTemplate({
   id: "account-health-monitor",
   title: "Account Health Monitor",
   summary: "Monitor accounts for risk, expansion signals, and missing next steps.",
   category: "Grow Customers",
   outcome: "Scores account health from CRM, email, meeting, and relationship signals, then alerts owners with recommended actions.",
+  userUseCase: "Use this when a founder or customer success owner wants a manual or scheduled monitor that turns scattered account activity into a reliable health view. The skill should synthesize CRM activity, enrichment, email, meetings, HubSpot, Slack, Notion, files, and web context into risk, expansion, relationship, and next-step signals.",
   personas: ["Customer Success", "Founder"],
   requiredApps: [externalApps.hubspot, externalApps.gmail, externalApps.slack],
   triggerModes: ["scheduled", "manual"],
-  focusAreas: ["account segments", "health signals", "risk thresholds", "owner alerts"],
+  autonomy: "Updates CRM",
+  interviewQuestions: [
+    {
+      id: "account-scope",
+      prompt: "Which accounts should the health monitor cover?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "all-customers", label: "All customers" },
+        { id: "strategic-accounts", label: "Strategic accounts" },
+        { id: "paid-customers", label: "Paid customers" },
+        { id: "implementation", label: "Implementation accounts" },
+        { id: "at-risk", label: "Known at-risk accounts" },
+      ],
+      freeformHint: "Include segment, lifecycle stage, ARR threshold, owner, or exclusion rules.",
+    },
+    {
+      id: "health-signals",
+      prompt: "Which signals should affect account health?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "engagement", label: "Engagement" },
+        { id: "support-issues", label: "Support/issues" },
+        { id: "executive-relationship", label: "Executive relationship" },
+        { id: "usage-adoption", label: "Usage/adoption" },
+        { id: "commercial-risk", label: "Commercial risk" },
+        { id: "expansion-signal", label: "Expansion signal" },
+      ],
+    },
+    {
+      id: "scoring-model",
+      prompt: "How should account health be reported?",
+      required: true,
+      options: [
+        { id: "red-yellow-green", label: "Red/yellow/green" },
+        { id: "numeric-score", label: "Numeric score" },
+        { id: "ranked-risk-list", label: "Ranked risk list" },
+        { id: "narrative-only", label: "Narrative only" },
+      ],
+    },
+    {
+      id: "alert-thresholds",
+      prompt: "When should the skill alert an account owner?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "health-drops", label: "Health drops" },
+        { id: "no-next-step", label: "No next step" },
+        { id: "exec-silent", label: "Executive silent" },
+        { id: "renewal-near", label: "Renewal near" },
+        { id: "expansion-opportunity", label: "Expansion opportunity" },
+      ],
+    },
+    {
+      id: "crm-write-policy",
+      prompt: "What CRM updates may the monitor make?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "health-note", label: "Add health note" },
+        { id: "health-field", label: "Update health field" },
+        { id: "owner-task", label: "Create owner task" },
+        { id: "no-write", label: "Read-only digest" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Use CRM, enrichment, web search, and files as the default source set; optionally incorporate Gmail, Calendar, HubSpot, Notion, and Slack when connected for recent activity and relationship context.",
+    "Support manual review runs and cron/scheduled health checks only; do not design around real-time triggers or webhook events.",
+    "Make scheduled runs idempotent by recording the account, run window, health outcome, alert reason, and created task IDs so unresolved alerts are not duplicated.",
+    "Apply the agreed scoring model consistently and include evidence, source links, confidence, and missing-data caveats for every health change.",
+    "Respect the CRM write policy: additive notes and attributed score updates are preferred; never overwrite owner-entered fields or lifecycle stages without explicit permission.",
+    "Alert account owners only when thresholds are met, with a short diagnosis, why it matters, the recommended next action, and whether the alert is urgent or informational.",
+    "Produce audience-specific outputs: owner action lists, founder-level portfolio summaries, CRM notes, and optional Slack or email digests in a direct founder-ops tone.",
+  ],
 });

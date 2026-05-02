@@ -1,13 +1,89 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const partnerPipelineBuilder = createSkillTemplate({
+export const partnerPipelineBuilder = defineSkillTemplate({
   id: "partner-pipeline-builder",
   title: "Partner Pipeline Builder",
   summary: "Build a partner pipeline with fit scoring, relationship paths, and next steps.",
   category: "Run Founder Ops",
   outcome: "Discovers potential partners, scores mutual value, identifies contacts and warm paths, and logs pipeline records.",
+  userUseCase: "Use when a founder, BD owner, or sales lead wants a manual or scheduled workflow to discover, enrich, score, and manage potential partners. The skill should build a pipeline around mutual value, relationship paths, and clear next actions rather than vague partnership wishlists.",
   personas: ["Founder", "Investor/BD", "Sales"],
   requiredApps: [externalApps.gmail, externalApps.hubspot],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["partner type", "mutual value", "relationship paths", "stage fields"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "partner-type",
+      prompt: "What type of partners should this pipeline focus on?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "channel", label: "Channel" },
+        { id: "integration", label: "Integration" },
+        { id: "agency", label: "Agency" },
+        { id: "strategic", label: "Strategic" },
+        { id: "community", label: "Community" },
+      ],
+    },
+    {
+      id: "mutual-value",
+      prompt: "What mutual value should the skill score for?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "shared-customers", label: "Shared customers" },
+        { id: "distribution", label: "Distribution" },
+        { id: "product-fit", label: "Product fit" },
+        { id: "co-marketing", label: "Co-marketing" },
+        { id: "revenue-potential", label: "Revenue potential" },
+      ],
+    },
+    {
+      id: "relationship-paths",
+      prompt: "Where should the skill look for relationship paths?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "crm", label: "Dench CRM" },
+        { id: "gmail", label: "Gmail" },
+        { id: "calendar", label: "Calendar" },
+        { id: "slack", label: "Slack" },
+        { id: "files-notion", label: "Files or Notion" },
+      ],
+    },
+    {
+      id: "crm-write-policy",
+      prompt: "How should partner pipeline records be handled?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "create-records", label: "Create records" },
+        { id: "add-notes", label: "Add notes" },
+        { id: "create-tasks", label: "Create tasks" },
+        { id: "suggest-stage", label: "Suggest stage" },
+        { id: "review-only", label: "Review only" },
+      ],
+    },
+    {
+      id: "audience-output",
+      prompt: "Which output views should be generated?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "founder-shortlist", label: "Founder shortlist" },
+        { id: "bd-action-list", label: "BD action list" },
+        { id: "crm-import", label: "CRM import" },
+        { id: "partner-brief", label: "Partner brief" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Use Dench CRM, native enrichment, web search, and files to identify partner candidates and evidence; optionally use Gmail, Calendar, HubSpot, Notion, and Slack for prior relationship and account context.",
+    "Support manual builds and cron/scheduled refreshes only; do not assume partner form submissions, CRM webhooks, or event listeners.",
+    "Make runs idempotent by deduping companies, domains, contacts, existing partner records, and previously dismissed targets before creating notes or tasks.",
+    "Follow the CRM write policy: additive partner notes, source attribution, confidence, and owner tasks are preferred; do not overwrite stages, owners, or custom fields unless explicitly allowed.",
+    "Alert owners when a partner has a strong warm path, material mutual value, overlapping customer signal, or a next step that should not wait for the next digest.",
+    "Produce audience-specific outputs: founder strategic shortlist, BD owner action queue, CRM import or update plan, and partner-facing brief or intro draft.",
+    "Use a founder-ops tone: pragmatic, commercially grounded, concise, and skeptical of partnerships without a clear next step or measurable upside.",
+  ],
 });

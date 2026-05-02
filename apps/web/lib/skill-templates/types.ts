@@ -81,17 +81,33 @@ export type SkillTemplateApp = {
   name: string;
 };
 
+export type SkillTemplateQuestionOption = {
+  id: string;
+  label: string;
+  description?: string;
+};
+
+export type SkillTemplateInterviewQuestion = {
+  id: string;
+  prompt: string;
+  required: boolean;
+  allowMultiple?: boolean;
+  options?: readonly SkillTemplateQuestionOption[];
+  freeformHint?: string;
+};
+
 export type SkillTemplate = {
   id: SkillTemplateId;
   title: string;
   summary: string;
   category: SkillTemplateCategory;
   outcome: string;
+  userUseCase: string;
   personas: readonly SkillTemplatePersona[];
   requiredApps: readonly SkillTemplateApp[];
   triggerModes: readonly SkillTemplateTriggerMode[];
   autonomy: SkillTemplateAutonomy;
-  interviewTopics: readonly string[];
+  interviewQuestions: readonly SkillTemplateInterviewQuestion[];
   skillInstructions: readonly string[];
   buildPrompt: () => string;
 };

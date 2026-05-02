@@ -1,13 +1,88 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const executiveDailyBrief = createSkillTemplate({
+export const executiveDailyBrief = defineSkillTemplate({
   id: "executive-daily-brief",
   title: "Executive Daily Brief",
   summary: "Start each day with priorities, meetings, follow-ups, and lurking risks.",
   category: "Prep Meetings",
   outcome: "Reviews calendar, inbox, Slack, CRM, and workspace context to produce a focused daily plan.",
+  userUseCase: "Use this when a founder, operator, or knowledge worker wants a morning command center instead of checking Calendar, Gmail, Slack, CRM, and Notion separately. The skill should run manually or on a morning cron, identify what needs attention today, and produce a calm executive brief with priorities, risks, prep needs, and follow-ups.",
   personas: ["Founder", "Operator", "Knowledge Worker"],
   requiredApps: [externalApps.googleCalendar, externalApps.gmail, externalApps.slack],
   triggerModes: ["scheduled", "manual"],
-  focusAreas: ["delivery time", "priority sources", "urgency rules", "task policy"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "brief-audience",
+      prompt: "Who will use this daily brief and what perspective should it optimize for?",
+      required: true,
+      options: [
+        { id: "founder", label: "Founder" },
+        { id: "sales-leader", label: "Sales leader" },
+        { id: "operator", label: "Operator" },
+        { id: "knowledge-worker", label: "Knowledge worker" },
+      ],
+    },
+    {
+      id: "priority-sources",
+      prompt: "Which sources should determine priorities?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "calendar", label: "Calendar" },
+        { id: "gmail", label: "Gmail" },
+        { id: "dench-crm", label: "Dench CRM" },
+        { id: "hubspot", label: "HubSpot" },
+        { id: "notion", label: "Notion" },
+        { id: "slack", label: "Slack" },
+      ],
+    },
+    {
+      id: "brief-sections",
+      prompt: "Which sections should the brief include?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "todays-meetings", label: "Today's meetings" },
+        { id: "urgent-follow-ups", label: "Urgent follow-ups" },
+        { id: "crm-risks", label: "CRM and pipeline risks" },
+        { id: "waiting-on-me", label: "Waiting on me" },
+        { id: "top-priorities", label: "Top priorities" },
+        { id: "prep-links", label: "Prep links" },
+      ],
+    },
+    {
+      id: "delivery-schedule",
+      prompt: "When should the daily brief arrive and should quiet days be skipped?",
+      required: true,
+      options: [
+        { id: "weekday-morning", label: "Weekday morning" },
+        { id: "daily-morning", label: "Every morning" },
+        { id: "manual-only", label: "Manual only" },
+      ],
+      freeformHint: "Include exact local time, timezone, and whether to skip days with no meetings.",
+    },
+    {
+      id: "destination-format",
+      prompt: "Where should the daily brief be delivered?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "gmail", label: "Gmail" },
+        { id: "notion", label: "Notion" },
+        { id: "dench-chat", label: "Dench chat" },
+        { id: "slack", label: "Slack" },
+      ],
+      freeformHint: "Include recipients, page or channel destinations, and desired brief length.",
+    },
+  ],
+  skillInstructions: [
+    "Support manual runs and cron-scheduled morning briefs only; do not assume passive app listeners.",
+    "Use Calendar as the daily structure, then rank Gmail, Dench CRM, HubSpot, Notion, and Slack signals by urgency, importance, and meeting relevance.",
+    "Include source attribution for deal, customer, investor, hiring, and relationship context that influences priority.",
+    "Do not send emails, update CRM, or modify tasks unless explicitly configured; default to a read-only brief with suggested actions.",
+    "Call out low-confidence or conflicting data instead of presenting it as fact, especially for pipeline risk or relationship status.",
+    "Deliver one scannable brief with top priorities, meetings, prep needs, follow-ups, and risks in the configured destination.",
+    "Make scheduled runs idempotent by generating at most one brief per recipient per scheduled window unless manually invoked.",
+  ],
 });

@@ -1,13 +1,88 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const weeklyFounderDigest = createSkillTemplate({
+export const weeklyFounderDigest = defineSkillTemplate({
   id: "weekly-founder-digest",
   title: "Weekly Founder Digest",
   summary: "Summarize the week across pipeline, customers, hiring, inbox, and priorities.",
   category: "Run Founder Ops",
   outcome: "Produces a weekly operating digest with wins, risks, asks, missed follow-ups, and priorities for the next week.",
+  userUseCase: "Use when a founder wants a manual or cron-scheduled weekly operating digest across customers, pipeline, fundraising, hiring, partner work, inbox, meetings, and unresolved commitments. The skill should turn scattered workspace activity into a crisp operating view, audience-specific summaries, and next-week priorities.",
   personas: ["Founder", "Operator"],
   requiredApps: [externalApps.gmail, externalApps.googleCalendar, externalApps.slack],
   triggerModes: ["scheduled", "manual"],
-  focusAreas: ["operating areas", "weekly schedule", "important people", "task policy"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "digest-scope",
+      prompt: "Which operating areas should the weekly digest cover?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "sales-pipeline", label: "Sales pipeline" },
+        { id: "customers", label: "Customers" },
+        { id: "fundraising", label: "Fundraising" },
+        { id: "hiring", label: "Hiring" },
+        { id: "partners", label: "Partners" },
+        { id: "team-ops", label: "Team ops" },
+      ],
+    },
+    {
+      id: "delivery-cadence",
+      prompt: "When should the digest be generated?",
+      required: true,
+      options: [
+        { id: "friday-eod", label: "Friday EOD" },
+        { id: "sunday-evening", label: "Sunday evening" },
+        { id: "monday-morning", label: "Monday morning" },
+        { id: "manual-only", label: "Manual only" },
+      ],
+      freeformHint: "Include timezone, recipients, and whether to skip quiet weeks.",
+    },
+    {
+      id: "priority-rules",
+      prompt: "What is important enough to make the founder digest?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "revenue-impact", label: "Revenue impact" },
+        { id: "customer-risk", label: "Customer risk" },
+        { id: "investor-board", label: "Investor/board" },
+        { id: "blocked-commitments", label: "Blocked commitments" },
+        { id: "founder-mentioned", label: "Founder mentioned" },
+      ],
+    },
+    {
+      id: "audience-versions",
+      prompt: "Which audience versions should the skill prepare?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "private-founder", label: "Private founder" },
+        { id: "leadership-team", label: "Leadership team" },
+        { id: "board-safe", label: "Board-safe" },
+        { id: "assistant-task-list", label: "Task list" },
+      ],
+    },
+    {
+      id: "workspace-write-policy",
+      prompt: "What should the skill write back to CRM or workspace records?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "no-write", label: "No writes" },
+        { id: "task-creation", label: "Create tasks" },
+        { id: "notes", label: "Add notes" },
+        { id: "status-suggestions", label: "Suggest status updates" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Use Dench CRM, enrichment, web search, files, Gmail, Calendar, and Slack to extract meetings, commitments, decisions, asks, unresolved threads, and material business changes.",
+    "Support manual generation and cron-scheduled weekly digest messages only; do not rely on automatic app events.",
+    "Make each scheduled digest idempotent by recording the covered week, source windows, generated digest ID, and created task IDs.",
+    "Respect the workspace write policy: prefer additive tasks and notes with source attribution; never overwrite human-authored status fields without explicit approval.",
+    "Alert owners for urgent items discovered during the digest, including missing next steps, stalled commitments, customer risk, or founder follow-up needed.",
+    "Produce audience-specific versions: private founder memo, leadership-safe summary, board-safe excerpt, and concrete task list with owners and due dates.",
+    "Use a founder-ops tone: concise, opinionated, low-drama, commercially grounded, and focused on decisions, leverage, and follow-through.",
+  ],
 });

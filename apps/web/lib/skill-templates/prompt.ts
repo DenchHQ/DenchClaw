@@ -1,7 +1,29 @@
-import type { SkillTemplateDefinition } from "./types";
+import type {
+  SkillTemplateDefinition,
+  SkillTemplateInterviewQuestion,
+} from "./types";
 
 function bulletList(items: readonly string[]): string {
   return items.map((item) => `- ${item}`).join("\n");
+}
+
+function formatQuestion(question: SkillTemplateInterviewQuestion, index: number): string {
+  const required = question.required ? "required" : "optional";
+  const mode = question.allowMultiple ? "multi-select" : "single-answer";
+  const optionText = question.options?.length
+    ? ` Choices: ${question.options
+        .map((option) =>
+          option.description
+            ? `${option.label} (${option.id}) - ${option.description}`
+            : `${option.label} (${option.id})`,
+        )
+        .join("; ")}.`
+    : "";
+  const freeform = question.freeformHint
+    ? ` Freeform guidance: ${question.freeformHint}.`
+    : "";
+
+  return `${index + 1}. ${question.prompt} [id: ${question.id}; ${required}; ${mode}].${optionText}${freeform}`;
 }
 
 export function buildSkillTemplatePromptText(template: SkillTemplateDefinition): string {
@@ -20,6 +42,9 @@ This should become a durable DenchClaw skill, not a one-off chat. DenchClaw is m
 This template is mainly for these personas: ${personas}.
 
 Required external setup for this template: ${requiredApps}.
+
+Who this skill is for and when it should help:
+${template.userUseCase}
 
 The desired outcome is:
 ${template.outcome}
@@ -44,9 +69,11 @@ When the next question has clear choices, ask it with a Dench question card inst
 Set "allowMultiple": true only when more than one option can be selected. Add "optional": true only when skipping is genuinely acceptable. Keep option labels short and include descriptions only when they prevent ambiguity.
 
 Before writing the final SKILL.md, gather these specifics:
-${bulletList(template.interviewTopics)}
+${template.interviewQuestions.map(formatQuestion).join("\n")}
 
-When you have enough context, create a complete SKILL.md for this workflow. Do not assume a skill-creator helper exists; if no helper is available, create the skill directly at skills/<kebab-case-skill-name>/SKILL.md and add references under that folder when useful. The skill should include:
+Ask the questions in that order unless my answer makes a later question unnecessary. If a question lists choices, prefer a dench-question card with the provided IDs and labels so I can answer quickly. Still accept custom freeform detail when my situation does not fit the choices.
+
+When you have enough context, create a complete SKILL.md for this reusable skill. Do not assume a skill-creator helper exists; if no helper is available, create the skill directly at skills/<kebab-case-skill-name>/SKILL.md and add references under that folder when useful. The skill should include:
 ${bulletList(template.skillInstructions)}
 
 Automation policy:

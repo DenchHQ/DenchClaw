@@ -1,13 +1,76 @@
-import { createSkillTemplate } from "./create-template";
+import { defineSkillTemplate } from "./create-template";
 
-export const targetAccountListBuilder = createSkillTemplate({
+export const targetAccountListBuilder = defineSkillTemplate({
   id: "target-account-list-builder",
   title: "Target Account List Builder",
   summary: "Turn an ICP into a ranked account list with contacts, evidence, and next actions.",
   category: "Find Leads",
   outcome: "Discovers target companies, enriches contacts, scores fit, and writes a prioritized list into Dench CRM.",
+  userUseCase: "Use this when a founder or seller knows the market they want to attack but needs DenchClaw to turn that ICP into a clean, ranked account list with evidence, exclusions, owners, and CRM-ready next actions.",
   personas: ["Founder", "Sales"],
   requiredApps: [],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["ICP filters and exclusions", "lead sources", "ranking rubric", "CRM output fields"],
+  autonomy: "Updates CRM",
+  interviewQuestions: [
+    {
+      id: "market-scope",
+      prompt: "Which industries, geographies, company sizes, or business models define the account universe?",
+      required: true,
+      freeformHint: "Example: B2B SaaS in North America, 200-2000 employees, selling to revenue teams.",
+    },
+    {
+      id: "qualification-signals",
+      prompt: "Which signals should make an account a strong fit?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "headcount-growth", label: "Headcount growth" },
+        { id: "funding", label: "Recent funding" },
+        { id: "tech-stack", label: "Specific tools" },
+        { id: "new-exec", label: "New executive" },
+        { id: "job-postings", label: "Relevant hiring" },
+        { id: "market-expansion", label: "Market expansion" },
+      ],
+    },
+    {
+      id: "exclusions",
+      prompt: "Which accounts, industries, regions, or CRM stages should be excluded?",
+      required: false,
+      freeformHint: "Example: current customers, open opportunities, agencies, companies under 50 employees.",
+    },
+    {
+      id: "priority-model",
+      prompt: "How should accounts be ranked for sales action?",
+      required: true,
+      options: [
+        { id: "best-fit", label: "Best ICP fit" },
+        { id: "strongest-signal", label: "Strongest signal" },
+        { id: "largest-size", label: "Largest company" },
+        { id: "customer-similarity", label: "Customer similarity" },
+        { id: "fastest-growth", label: "Fastest growth" },
+      ],
+    },
+    {
+      id: "crm-output",
+      prompt: "Which CRM fields and handoff details should the final list include?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "fit-reason", label: "Fit reason" },
+        { id: "signal-evidence", label: "Signal evidence" },
+        { id: "priority-score", label: "Priority score" },
+        { id: "owner", label: "Recommended owner" },
+        { id: "next-action", label: "Next action" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Translate the user's ICP into concrete account search filters before gathering companies.",
+    "Use Dench CRM, native enrichment, web search, uploaded files, and workspace context to assemble candidate accounts.",
+    "Deduplicate against existing CRM accounts, customers, active opportunities, previous Dench runs, and user-provided exclusions.",
+    "Enrich each account with domain, industry, size, location, signals, source URLs, and confidence notes.",
+    "Score accounts with the selected priority model and explain the top ranking factors in plain language.",
+    "Write or propose CRM records additively with source attribution, not silent overwrites of user-authored fields.",
+    "Return a sales-ready account table with owners, next actions, blocked records, and any low-confidence matches separated for review.",
+  ],
 });

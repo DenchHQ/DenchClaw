@@ -1,6 +1,6 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const meetingPrepBrief = createSkillTemplate({
+export const meetingPrepBrief = defineSkillTemplate({
   id: "meeting-prep-brief",
   title: "Meeting Prep Brief",
   summary: "Prepare concise briefs before sales, customer, partner, or recruiting calls.",
@@ -9,5 +9,77 @@ export const meetingPrepBrief = createSkillTemplate({
   personas: ["Founder", "Sales", "Customer Success", "Investor/BD"],
   requiredApps: [externalApps.googleCalendar, externalApps.gmail],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["meeting types", "research depth", "brief timing", "sensitive topics"],
+  autonomy: "Can automate",
+  userUseCase: "Use this before important external meetings so DenchClaw turns calendar, inbox, CRM, enrichment, and notes into a concise brief with context, risks, open asks, and suggested agenda.",
+  interviewQuestions: [
+    {
+      id: "meeting-types",
+      prompt: "Which meeting types should receive prep briefs?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "sales", label: "Sales" },
+        { id: "customer", label: "Customer" },
+        { id: "partner", label: "Partner" },
+        { id: "recruiting", label: "Recruiting" },
+        { id: "investor", label: "Investor" },
+      ],
+    },
+    {
+      id: "brief-sections",
+      prompt: "What should each brief include?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "attendees", label: "Attendee background" },
+        { id: "crm-history", label: "CRM history" },
+        { id: "recent-email", label: "Recent email" },
+        { id: "open-asks", label: "Open asks" },
+        { id: "risks", label: "Risks" },
+        { id: "agenda", label: "Agenda" },
+      ],
+    },
+    {
+      id: "prep-timing",
+      prompt: "When should briefs be generated before meetings?",
+      required: true,
+      options: [
+        { id: "15-minutes", label: "15 minutes before" },
+        { id: "one-hour", label: "1 hour before" },
+        { id: "morning-of", label: "Morning of" },
+        { id: "manual-only", label: "Manual only" },
+      ],
+      freeformHint: "Include timezone and calendar filters such as external-only or CRM contacts only.",
+    },
+    {
+      id: "destination",
+      prompt: "Where should the prep brief be delivered?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "dench-chat", label: "Dench chat" },
+        { id: "calendar-note", label: "Calendar note" },
+        { id: "gmail-draft", label: "Gmail draft" },
+        { id: "notion", label: "Notion" },
+      ],
+    },
+    {
+      id: "sensitive-policy",
+      prompt: "How should sensitive or low-confidence information be handled?",
+      required: true,
+      options: [
+        { id: "include-labeled", label: "Include with labels" },
+        { id: "private-section", label: "Private section" },
+        { id: "hide-sensitive", label: "Hide sensitive" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Support manual prep for a selected meeting and scheduled prep for qualifying upcoming calendar events; do not assume calendar webhooks.",
+    "Use the calendar event as the anchor, then gather CRM, Gmail, HubSpot, Notion, enrichment, and file context relevant to attendees and accounts.",
+    "Produce a scannable brief with meeting goal, attendee context, relationship history, recent activity, open asks, risks, and suggested questions.",
+    "Label uncertain claims with confidence and keep sensitive private context in the configured section or out of the brief.",
+    "Do not write CRM or meeting notes unless configured; when writing, use additive notes with source attribution.",
+    "Make scheduled prep idempotent by skipping meetings already briefed unless important context changed.",
+  ],
 });

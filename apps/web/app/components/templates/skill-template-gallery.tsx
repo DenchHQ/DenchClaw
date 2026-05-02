@@ -72,10 +72,14 @@ function templateMatches(template: SkillTemplate, query: string): boolean {
     template.category,
     template.outcome,
     template.autonomy,
+    template.userUseCase,
     ...template.personas,
     ...template.triggerModes,
     ...template.requiredApps.map((app) => app.name),
-    ...template.interviewTopics,
+    ...template.interviewQuestions.map((question) => question.prompt),
+    ...template.interviewQuestions.flatMap((question) =>
+      question.options?.map((option) => `${option.label} ${option.description ?? ""}`) ?? [],
+    ),
   ]
     .join(" ")
     .toLowerCase()

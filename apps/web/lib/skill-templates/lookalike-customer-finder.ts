@@ -1,13 +1,75 @@
-import { createSkillTemplate, externalApps } from "./create-template";
+import { defineSkillTemplate, externalApps } from "./create-template";
 
-export const lookalikeCustomerFinder = createSkillTemplate({
+export const lookalikeCustomerFinder = defineSkillTemplate({
   id: "lookalike-customer-finder",
   title: "Lookalike Customer Finder",
   summary: "Use best customers as seeds to find companies that look and behave like them.",
   category: "Find Leads",
   outcome: "Analyzes customer seeds, extracts fit patterns, discovers lookalike accounts, and creates a ranked prospect list.",
+  userUseCase: "Use this when a founder, sales team, or RevOps owner has a set of great customers and wants DenchClaw to discover net-new accounts with similar firmographics, buying triggers, and use-case patterns. The skill should compare Dench CRM and HubSpot customer context, native enrichment, files, and web research to produce a defensible prospect list rather than a loose 'companies like these' dump.",
   personas: ["Founder", "Sales", "RevOps"],
   requiredApps: [externalApps.hubspot],
   triggerModes: ["manual", "scheduled"],
-  focusAreas: ["seed customers", "match signals", "output size", "dedupe policy"],
+  autonomy: "Can automate",
+  interviewQuestions: [
+    {
+      id: "seed-customers",
+      prompt: "Which customers should be used as the lookalike seed set?",
+      required: true,
+      freeformHint: "Paste company names/domains or reference a CRM segment, HubSpot list, saved view, or uploaded file.",
+    },
+    {
+      id: "success-traits",
+      prompt: "What makes these customers worth copying?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "high-acv", label: "High ACV" },
+        { id: "fast-sales-cycle", label: "Fast sales cycle" },
+        { id: "strong-retention", label: "Strong retention" },
+        { id: "expansion", label: "Expansion potential" },
+        { id: "strategic-logo", label: "Strategic logo" },
+      ],
+    },
+    {
+      id: "similarity-dimensions",
+      prompt: "Which similarity dimensions matter most?",
+      required: true,
+      allowMultiple: true,
+      options: [
+        { id: "industry", label: "Industry" },
+        { id: "company-size", label: "Company size" },
+        { id: "growth-rate", label: "Growth rate" },
+        { id: "tech-stack", label: "Tech stack" },
+        { id: "buyer-team", label: "Buyer team" },
+        { id: "use-case", label: "Use case" },
+      ],
+    },
+    {
+      id: "blocked-matches",
+      prompt: "Which companies or categories should be excluded from the lookalike list?",
+      required: false,
+      freeformHint: "Example: current customers, competitors, non-US companies, accounts already in active opportunities.",
+    },
+    {
+      id: "result-goal",
+      prompt: "What should the final list optimize for?",
+      required: true,
+      options: [
+        { id: "closest-similarity", label: "Closest similarity" },
+        { id: "largest-market", label: "Largest market" },
+        { id: "fastest-outreach", label: "Fastest outreach" },
+        { id: "highest-intent", label: "Highest intent" },
+      ],
+    },
+  ],
+  skillInstructions: [
+    "Normalize seed customers from Dench CRM, HubSpot, uploaded files, or user-provided text, including company domains and customer status.",
+    "Derive shared traits across the seed set: firmographics, market category, buyer team, use case, buying trigger, retention or expansion signals, and observable operating patterns.",
+    "Search for non-customer accounts that match the selected similarity dimensions using Dench-native enrichment and web research.",
+    "Exclude current customers, blocked categories, duplicates, competitors, and accounts already in active opportunities unless explicitly included.",
+    "Rank each lookalike by similarity strength and explain which seed-customer traits it matches.",
+    "Return account recommendations with evidence, confidence, source links, CRM status, and suggested prospecting angle.",
+    "For scheduled refreshes, report only new or materially improved lookalikes since the prior run and avoid recreating records already written to CRM.",
+  ],
 });
