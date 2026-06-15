@@ -10,15 +10,20 @@ import {
 import {
 	extractDomain,
 	extractEnrichmentValue,
+	getEnrichFieldsForApolloPath,
 	getEnrichmentColumns,
 	isEligibleInputField,
 	type EnrichmentColumnDef,
 } from "@/lib/enrichment-columns";
+import {
+	gatewayCompanySearch,
+	gatewayPersonContact,
+	pollEnrichmentJobWithTimeout,
+	type EnrichFieldToken,
+} from "@/lib/dench-gateway-enrichment";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-const ENRICHMENT_BASE_PATH = "/v1/enrichment";
 
 function sqlEscape(s: string): string {
 	return s.replace(/'/g, "''");
@@ -49,7 +54,7 @@ const ENTRY_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
 /**
  * POST /api/workspace/objects/[name]/enrich
- * Enriches entries via Apollo through the Dench Cloud gateway.
+ * Enriches entries via the Dench Cloud gateway (FullEnrich-backed APIs).
  * Streams progress as SSE so the frontend can show a waterfall effect.
  */
 export async function POST(
@@ -250,16 +255,29 @@ export async function POST(
 				}
 
 				try {
-					const result = await callApolloGateway(
+					const enrichFields = getEnrichFieldsForApolloPath(
+						category,
+						matchedColumn.apolloPath,
+					);
+					const result = await callDenchGateway(
 						gatewayUrl,
 						apiKey,
 						category,
 						inputValue,
-						matchedColumn.requiredFields,
+						enrichFields,
 					);
 					if (cancelled) break;
 
 					if (!result.ok) {
+						if (result.pending && result.enrichmentId) {
+							send({
+								type: "pending",
+								entryId: entry.entry_id,
+								enrichmentId: result.enrichmentId,
+								current: i + 1,
+								total,
+							});
+						}
 						failed++;
 						send({
 							type: "error",
@@ -272,7 +290,7 @@ export async function POST(
 					}
 
 					const value = extractEnrichmentValue(
-						result.payload as Record<string, unknown>,
+						result.payload,
 						matchedColumn,
 					);
 
@@ -331,46 +349,51 @@ export async function POST(
 }
 
 type GatewayCallResult =
-	| { ok: true; payload: unknown }
-	| { ok: false; error: string };
+	| { ok: true; payload: Record<string, unknown> }
+	| { ok: false; error: string; pending?: boolean; enrichmentId?: string };
 
-async function callApolloGateway(
+async function callDenchGateway(
 	gatewayUrl: string,
 	apiKey: string,
 	category: "people" | "company",
 	inputValue: string,
-	requiredFields: string[],
+	enrichFields: EnrichFieldToken[] | undefined,
 ): Promise<GatewayCallResult> {
 	if (category === "people") {
-		const body: Record<string, unknown> = {};
-
 		if (inputValue.includes("linkedin.com")) {
-			body.linkedin_url = inputValue;
-		} else if (inputValue.includes("@")) {
-			body.email = inputValue;
-		} else {
-			return { ok: false, error: "Unsupported people identifier" };
-		}
-		if (requiredFields.length > 0) {
-			body.requiredFields = requiredFields;
-		}
+			const contact = await gatewayPersonContact(gatewayUrl, apiKey, {
+				linkedinUrl: inputValue,
+				enrichFields,
+			});
+			if (!contact.ok) {
+				return { ok: false, error: contact.error };
+			}
+			if (contact.result.kind === "person") {
+				return { ok: true, payload: contact.result.person };
+			}
+			if (contact.result.kind === "empty") {
+				return { ok: false, error: contact.result.reason };
+			}
 
-		const response = await fetch(
-			`${gatewayUrl}${ENRICHMENT_BASE_PATH}/people`,
-			{
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					authorization: `Bearer ${apiKey}`,
-				},
-				body: JSON.stringify(body),
-			},
-		);
-
-		if (!response.ok) {
-			return { ok: false, error: await formatGatewayError(response) };
+			const poll = await pollEnrichmentJobWithTimeout(
+				gatewayUrl,
+				apiKey,
+				contact.result.enrichmentId,
+			);
+			if (!poll.ok) {
+				return {
+					ok: false,
+					error: poll.error,
+					pending: poll.pending,
+					enrichmentId: contact.result.enrichmentId,
+				};
+			}
+			return { ok: true, payload: poll.person };
 		}
-		return { ok: true, payload: await response.json() };
+		if (inputValue.includes("@")) {
+			return { ok: false, error: "People enrichment requires a LinkedIn URL" };
+		}
+		return { ok: false, error: "Unsupported people identifier" };
 	}
 
 	const domain = extractDomain(inputValue);
@@ -378,44 +401,14 @@ async function callApolloGateway(
 		return { ok: false, error: "Could not extract domain" };
 	}
 
-	const url = new URL(`${gatewayUrl}${ENRICHMENT_BASE_PATH}/company`);
-	url.searchParams.set("domain", domain);
-	if (requiredFields.length > 0) {
-		url.searchParams.set("requiredFields", requiredFields.join(","));
+	const company = await gatewayCompanySearch(gatewayUrl, apiKey, domain, 1);
+	if (!company.ok) {
+		return { ok: false, error: company.error };
 	}
-	const response = await fetch(url, {
-		method: "GET",
-		headers: { authorization: `Bearer ${apiKey}` },
-	});
-
-	if (!response.ok) {
-		return { ok: false, error: await formatGatewayError(response) };
+	if (!company.company) {
+		return { ok: false, error: "No data returned" };
 	}
-	return { ok: true, payload: await response.json() };
-}
-
-async function formatGatewayError(response: Response): Promise<string> {
-	let body: unknown = null;
-	try {
-		body = await response.json();
-	} catch {
-		// Body not JSON; fall back to status-only messages below.
-	}
-	const error = (body as { error?: { code?: string; message?: string } } | null)?.error;
-	const code = error?.code;
-	const message = error?.message;
-
-	if (response.status === 404 || code === "not_found") {
-		return "No data returned";
-	}
-	if (response.status === 503 || code === "provider_unavailable") {
-		return "Gateway providers unavailable";
-	}
-	if (code === "invalid_required_field") {
-		return message ?? "Invalid required field";
-	}
-	if (message) return message;
-	return `Gateway request failed (HTTP ${response.status})`;
+	return { ok: true, payload: { organization: company.company } };
 }
 
 function patchEntryField(

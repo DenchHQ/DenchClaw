@@ -17,7 +17,7 @@ export default function WorkspaceRedirectPage() {
   }, [router]);
 
   return (
-    <div className="flex h-screen items-center justify-center" style={{ background: "var(--color-bg)" }}>
+    <div className="flex h-full items-center justify-center" style={{ background: "var(--color-bg)" }}>
       <UnicodeSpinner name="braille" className="text-2xl" style={{ color: "var(--color-text-muted)" }} />
     </div>
   );

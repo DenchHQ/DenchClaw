@@ -473,7 +473,7 @@ export function WorkspaceShell() {
   return (
     <ToastProvider>
       <Suspense fallback={
-        <div className="flex h-screen items-center justify-center" style={{ background: "var(--color-bg)" }}>
+        <div className="flex h-full items-center justify-center" style={{ background: "var(--color-bg)" }}>
           <UnicodeSpinner name="braille" className="text-2xl" style={{ color: "var(--color-text-muted)" }} />
         </div>
       }>
@@ -2463,7 +2463,7 @@ function WorkspacePageInner() {
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
     <div
       ref={layoutRef}
-      className="flex h-screen"
+      className="flex h-full min-h-0"
       style={{ background: "var(--color-main-bg)" }}
       onClick={handleContainerClick}
     >

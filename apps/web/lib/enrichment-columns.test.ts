@@ -5,11 +5,12 @@ import {
 	extractEnrichmentValue,
 	getAvailableEnrichmentCategories,
 	getEligibleInputFields,
+	getEnrichFieldsForApolloPath,
 	getRequiredFieldsForApolloPath,
 } from "./enrichment-columns";
 
 describe("getEligibleInputFields", () => {
-	it("limits people enrichment inputs to email and LinkedIn fields", () => {
+	it("limits people enrichment inputs to LinkedIn fields (email is rejected by the gateway)", () => {
 		const fields = [
 			{ id: "name", name: "Full Name", type: "text" },
 			{ id: "email", name: "Email", type: "email" },
@@ -18,7 +19,6 @@ describe("getEligibleInputFields", () => {
 		];
 
 		expect(getEligibleInputFields("people", fields).map((field) => field.id)).toEqual([
-			"email",
 			"linkedin",
 		]);
 	});
@@ -44,17 +44,20 @@ describe("getEligibleInputFields", () => {
 		expect(getAvailableEnrichmentCategories("companies", [])).toEqual(["company"]);
 	});
 
-	it("makes enrichment available on generic tables based on identifier columns", () => {
-		expect(getAvailableEnrichmentCategories("investors", [
-			{ id: "email", name: "Email", type: "email" },
-		])).toEqual(["people"]);
-
+	it("makes company enrichment available on generic tables with a domain column", () => {
 		expect(getAvailableEnrichmentCategories("portfolio", [
 			{ id: "domain", name: "Domain", type: "text" },
 		])).toEqual(["company"]);
 	});
 
-	it("shows both enrichment categories on generic tables when LinkedIn is ambiguous or no identifiers exist yet", () => {
+	it("shows both enrichment categories on generic tables when identifiers are ambiguous or email-only", () => {
+		// Email is no longer a people-enrichment identifier (the gateway requires a
+		// LinkedIn URL for people), so an email-only generic table can't be pinned
+		// to a single category and surfaces both options.
+		expect(getAvailableEnrichmentCategories("investors", [
+			{ id: "email", name: "Email", type: "email" },
+		])).toEqual(["people", "company"]);
+
 		expect(getAvailableEnrichmentCategories("pipeline", [
 			{ id: "linkedin", name: "LinkedIn URL", type: "url" },
 		])).toEqual(["people", "company"]);
@@ -86,6 +89,41 @@ describe("requiredFields mapping", () => {
 
 	it("returns an empty list for unknown apolloPaths so the gateway uses default backfill", () => {
 		expect(getRequiredFieldsForApolloPath("people", "person.unknown")).toEqual([]);
+	});
+});
+
+describe("getEnrichFieldsForApolloPath", () => {
+	it("maps a phone requiredField to the gateway phones token", () => {
+		expect(
+			getEnrichFieldsForApolloPath("people", "person.contact.phone_numbers.0.sanitized_number"),
+		).toEqual(["phones"]);
+	});
+
+	it("maps email/work_emails requiredFields to the gateway work_emails token", () => {
+		const emailColumn = PEOPLE_ENRICHMENT_COLUMNS.find((column) => column.label === "Email");
+		expect(emailColumn).toBeDefined();
+		expect(getEnrichFieldsForApolloPath("people", emailColumn!.apolloPath)).toEqual([
+			"work_emails",
+		]);
+	});
+
+	it("returns undefined when the column carries no enrichFields contract (default backfill)", () => {
+		// Title has an empty requiredFields list, so no narrowing token is sent.
+		expect(getEnrichFieldsForApolloPath("people", "person.title")).toBeUndefined();
+	});
+
+	it("returns undefined for unknown apolloPaths so the gateway uses default backfill", () => {
+		expect(getEnrichFieldsForApolloPath("people", "person.unknown")).toBeUndefined();
+	});
+
+	it("returns undefined for non-contact Apollo fields so the gateway uses default backfill", () => {
+		// industryList / website are Apollo metadata tokens with no contact-field
+		// mapping. We must NOT narrow these to work_emails, otherwise the gateway
+		// would only attempt email backfill and the requested field would be
+		// missing from the response. Sending no token lets the gateway run its
+		// default backfill and return the metadata.
+		expect(getEnrichFieldsForApolloPath("company", "organization.industry")).toBeUndefined();
+		expect(getEnrichFieldsForApolloPath("company", "organization.website_url")).toBeUndefined();
 	});
 });
 

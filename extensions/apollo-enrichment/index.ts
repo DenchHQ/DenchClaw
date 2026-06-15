@@ -1,54 +1,19 @@
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
 import {
+  gatewayCompanySearch,
+  gatewayEnrichmentJob,
+  gatewayPeopleSearch,
+  gatewayPersonContact,
+  normalizePersonRecord,
+} from "../shared/dench-gateway-client.js";
+import {
   readDenchAuthProfileKey,
   resolveDenchGatewayUrl,
 } from "../shared/dench-auth.js";
 
 export const id = "apollo-enrichment";
 
-const ENRICHMENT_BASE_PATH = "/v1/enrichment";
-const APOLLO_ACTIONS = ["people", "company", "people_search"] as const;
-
-/**
- * Canonical `requiredFields` lists for each enrichment action.
- *
- * Why these exist: the Dench Cloud gateway's "default backfill" path —
- * the one taken when the caller sends no `requiredFields` — was wired to
- * Apollo's now-removed `mode` field. Apollo returns
- * `{ code: "deprecated_field", message: "The mode field has been removed.
- * Use requiredFields to control which fields the waterfall must populate." }`,
- * which surfaces in chat as "Apollo hit an API issue." The column-based
- * enrichment route never hits this because it derives `requiredFields`
- * from the matched column. The chat tool used to leave the parameter
- * optional with a description telling the agent it could omit. The agent
- * naturally omitted, the gateway took its broken default-backfill path,
- * Apollo rejected it.
- *
- * The fix: when the caller omits `requiredFields`, the plugin substitutes
- * the canonical list below. This mirrors the columns defined in
- * `apps/web/lib/enrichment-columns.ts` (the union of every column's
- * `requiredFields`), which the column-enrichment route already exercises
- * in production and which is on the gateway allowlist. Callers can still
- * override with their own list.
- */
-const PEOPLE_DEFAULT_REQUIRED_FIELDS = [
-  "fullName",
-  "email",
-  "headline",
-  "linkedinID",
-  "URLs",
-  "phone",
-  "location",
-];
-
-const COMPANY_DEFAULT_REQUIRED_FIELDS = [
-  "name",
-  "website",
-  "industryList",
-  "linkedinID",
-  "totalFunding",
-  "founded",
-];
+const ENRICH_ACTIONS = ["people", "company", "people_search", "job_status"] as const;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -60,16 +25,6 @@ function readTrimmedString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function readStringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const items = value
-    .map((item) => readTrimmedString(item))
-    .filter((item): item is string => Boolean(item));
-  return items.length > 0 ? items : undefined;
-}
-
 function jsonResult(payload: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
@@ -77,23 +32,28 @@ function jsonResult(payload: unknown) {
   };
 }
 
-const ApolloEnrichParameters = {
+const DenchEnrichParameters = {
   type: "object",
   additionalProperties: false,
   properties: {
     action: {
       type: "string",
-      enum: [...APOLLO_ACTIONS],
-      description: 'Action to perform: "people", "company", or "people_search".',
+      enum: [...ENRICH_ACTIONS],
+      description:
+        'Action: "people" (person contact), "company" (domain lookup), "people_search" (filters), or "job_status" (poll queued person job).',
     },
-    email: { type: "string", description: "Email for people enrichment." },
-    linkedinUrl: { type: "string", description: "LinkedIn URL for people enrichment." },
+    enrichmentId: {
+      type: "string",
+      description: "Enrichment job ID for job_status polling.",
+    },
+    email: { type: "string", description: "Legacy hint; person contact prefers linkedinUrl or name+company." },
+    linkedinUrl: { type: "string", description: "LinkedIn URL for person contact enrichment." },
     firstName: { type: "string", description: "Person first name." },
     lastName: { type: "string", description: "Person last name." },
     domain: { type: "string", description: "Company domain such as acme.com." },
     organizationName: {
       type: "string",
-      description: "Organization name hint for people enrichment.",
+      description: "Organization name hint for person contact.",
     },
     personTitles: {
       type: "array",
@@ -110,7 +70,7 @@ const ApolloEnrichParameters = {
       items: { type: "string" },
       description: "Organization domains for people search.",
     },
-    page: { type: "number", description: "People search page number." },
+    page: { type: "number", description: "People search page number (1-based)." },
     perPage: { type: "number", description: "People search page size." },
     first_name: { type: "string", description: "Legacy alias for firstName." },
     last_name: { type: "string", description: "Legacy alias for lastName." },
@@ -132,11 +92,17 @@ const ApolloEnrichParameters = {
       description: "Legacy alias for organizationDomains.",
     },
     per_page: { type: "number", description: "Legacy alias for perPage." },
+    enrichFields: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        'FullEnrich enrichFields for person contact: "work_emails", "phones", "personal_emails", or "all". Defaults to work_emails.',
+    },
     requiredFields: {
       type: "array",
       items: { type: "string" },
       description:
-        "Optional Dench gateway requiredFields contract. The waterfall stops as soon as every listed field is non-null on the merged record. Omit to use the canonical default for the action (people: name/email/headline/linkedin/URLs/phone/location; company: name/website/industry/linkedin/funding/founded). Never omit just to opt out — the gateway's no-list path is deprecated and Apollo rejects it.",
+        "Legacy Apollo requiredFields; mapped to enrichFields (email→work_emails, phone→phones). Prefer enrichFields.",
     },
     required_fields: {
       type: "array",
@@ -147,156 +113,99 @@ const ApolloEnrichParameters = {
   required: ["action"],
 };
 
-function buildPeopleBody(params: Record<string, unknown>) {
-  const body: Record<string, unknown> = {};
-  const email = readTrimmedString(params.email);
-  const linkedinUrl =
-    readTrimmedString(params.linkedinUrl) ?? readTrimmedString(params.linkedin_url);
-  const firstName = readTrimmedString(params.firstName) ?? readTrimmedString(params.first_name);
-  const lastName = readTrimmedString(params.lastName) ?? readTrimmedString(params.last_name);
-  const domain = readTrimmedString(params.domain);
-  const organizationName =
-    readTrimmedString(params.organizationName) ?? readTrimmedString(params.organization_name);
-
-  if (email) {
-    body.email = email;
-  }
-  if (linkedinUrl) {
-    body.linkedin_url = linkedinUrl;
-  }
-  if (firstName) {
-    body.first_name = firstName;
-  }
-  if (lastName) {
-    body.last_name = lastName;
-  }
-  if (domain) {
-    body.domain = domain;
-  }
-  if (organizationName) {
-    body.organization_name = organizationName;
-  }
-
-  return body;
-}
-
-function buildPeopleSearchBody(params: Record<string, unknown>) {
-  const body: Record<string, unknown> = {};
-  const personTitles = readStringList(params.personTitles) ?? readStringList(params.person_titles);
-  const personLocations =
-    readStringList(params.personLocations) ?? readStringList(params.person_locations);
-  const organizationDomains =
-    readStringList(params.organizationDomains) ?? readStringList(params.organization_domains);
-  const page = typeof params.page === "number" ? params.page : undefined;
-  const perPage =
-    typeof params.perPage === "number"
-      ? params.perPage
-      : typeof params.per_page === "number"
-        ? params.per_page
-        : undefined;
-
-  if (personTitles) {
-    body.person_titles = personTitles;
-  }
-  if (personLocations) {
-    body.person_locations = personLocations;
-  }
-  if (organizationDomains) {
-    body.organization_domains = organizationDomains;
-  }
-  if (page !== undefined) {
-    body.page = page;
-  }
-  if (perPage !== undefined) {
-    body.per_page = perPage;
-  }
-
-  return body;
-}
-
-async function parseResponse(response: Response) {
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    return response.json();
-  }
-  return response.text();
-}
-
-async function executeApolloEnrich(
+async function executeDenchEnrich(
   gatewayUrl: string,
   apiKey: string,
-  _toolCallId: string,
   params: Record<string, unknown>,
 ) {
   const action = params.action;
-  if (action !== "people" && action !== "company" && action !== "people_search") {
+  if (
+    action !== "people" &&
+    action !== "company" &&
+    action !== "people_search" &&
+    action !== "job_status"
+  ) {
     return jsonResult({
-      error: `Unknown action "${String(action)}". Use "people", "company", or "people_search".`,
+      error: `Unknown action "${String(action)}". Use "people", "company", "people_search", or "job_status".`,
     });
   }
 
   try {
-    let response: Response;
-    // Caller-supplied requiredFields wins. When omitted, fall back to the
-    // canonical allowlist for the action so the gateway never takes its
-    // deprecated default-backfill path (which Apollo rejects with the
-    // "mode field has been removed" 400). people_search uses a different
-    // endpoint that does not accept requiredFields, so leave it alone.
-    const callerRequiredFields =
-      readStringList(params.requiredFields) ?? readStringList(params.required_fields);
-
     if (action === "people") {
-      const body = buildPeopleBody(params);
-      body.requiredFields = callerRequiredFields ?? PEOPLE_DEFAULT_REQUIRED_FIELDS;
-      if (!body.email && !body.linkedin_url && !body.first_name && !body.last_name) {
-        return jsonResult({
-          error: "People enrichment requires at least an email, LinkedIn URL, or person name.",
-        });
+      const result = await gatewayPersonContact(gatewayUrl, apiKey, params);
+      if (!result.ok) {
+        return jsonResult({ error: result.error });
       }
-      response = await fetch(`${gatewayUrl}${ENRICHMENT_BASE_PATH}/people`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(body),
+      if (result.result.kind === "person") {
+        return jsonResult({ person: result.result.person });
+      }
+      if (result.result.kind === "empty") {
+        return jsonResult({ error: result.result.reason });
+      }
+      return jsonResult({
+        enrichmentId: result.result.enrichmentId,
+        status: result.result.status,
+        pollPath: result.result.pollPath,
+        message:
+          "Person enrichment queued. Call action job_status with enrichmentId, or retry later.",
       });
-    } else if (action === "company") {
+    }
+
+    if (action === "company") {
       const domain = readTrimmedString(params.domain);
       if (!domain) {
         return jsonResult({ error: "Company enrichment requires a domain." });
       }
-      const url = new URL(`${gatewayUrl}${ENRICHMENT_BASE_PATH}/company`);
-      url.searchParams.set("domain", domain);
-      const companyRequiredFields = callerRequiredFields ?? COMPANY_DEFAULT_REQUIRED_FIELDS;
-      url.searchParams.set("requiredFields", companyRequiredFields.join(","));
-      response = await fetch(url, {
-        method: "GET",
-        headers: {
-          authorization: `Bearer ${apiKey}`,
-        },
-      });
-    } else {
-      const body = buildPeopleSearchBody(params);
-      response = await fetch(`${gatewayUrl}${ENRICHMENT_BASE_PATH}/people/search`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(body),
-      });
+      const result = await gatewayCompanySearch(gatewayUrl, apiKey, domain, 1);
+      if (!result.ok) {
+        return jsonResult({ error: result.error });
+      }
+      if (!result.company) {
+        return jsonResult({ error: "No data returned" });
+      }
+      return jsonResult({ company: result.company, organization: result.company });
     }
 
-    if (!response.ok) {
-      const detail = await parseResponse(response).catch(() => "");
+    if (action === "people_search") {
+      const result = await gatewayPeopleSearch(gatewayUrl, apiKey, params);
+      if (!result.ok) {
+        return jsonResult({ error: result.error });
+      }
+      return jsonResult({ people: result.people });
+    }
+
+    const enrichmentId = readTrimmedString(params.enrichmentId);
+    if (!enrichmentId) {
+      return jsonResult({ error: "job_status requires enrichmentId." });
+    }
+    const jobResult = await gatewayEnrichmentJob(gatewayUrl, apiKey, enrichmentId);
+    if (!jobResult.ok) {
+      return jsonResult({ error: jobResult.error });
+    }
+    const job = jobResult.job;
+    if (job.status === "failed") {
       return jsonResult({
-        error: `Enrichment request failed (HTTP ${response.status}).`,
-        detail: detail || undefined,
+        enrichmentId,
+        status: job.status,
+        error: job.error?.message ?? "Enrichment job failed",
       });
     }
-
-    return jsonResult(await parseResponse(response));
+    if (job.status === "pending") {
+      return jsonResult({
+        enrichmentId,
+        status: job.status,
+        message: "Job still pending; retry job_status later.",
+      });
+    }
+    const people = (job.people ?? []).map((p) =>
+      normalizePersonRecord(p as Record<string, unknown>),
+    );
+    return jsonResult({
+      enrichmentId,
+      status: job.status,
+      people,
+      person: people[0],
+    });
   } catch (err) {
     return jsonResult({
       error: "Enrichment request failed.",
@@ -325,16 +234,15 @@ export default function register(api: OpenClawPluginApi) {
   }
 
   api.registerTool({
-    name: "apollo_enrich",
-    label: "Apollo Enrichment",
+    name: "dench_enrich",
+    label: "Dench Enrichment",
     description:
-      "Look up Apollo people, companies, or people search results through the Dench Cloud gateway. " +
-      'Use action "people" for an individual profile, "company" for company enrichment by domain, ' +
-      'or "people_search" to search people with filters such as titles, locations, and company domains. ' +
-      "For people and company, the tool always sends gateway requiredFields (defaults when omitted) so Apollo's removed mode field is never used. " +
-      "Prefer this tool over integration execute tools for the same structured enrichment from chat.",
-    parameters: ApolloEnrichParameters,
-    execute: (toolCallId: string, params: Record<string, unknown>) =>
-      executeApolloEnrich(gatewayUrl, apiKey, toolCallId, params),
+      "Look up people and companies through the Dench Cloud gateway (FullEnrich). " +
+      'Use action "people" for person contact (linkedinUrl or name+company); returns cached person immediately or a queued enrichmentId. ' +
+      'Use "company" for company lookup by domain. Use "people_search" for filtered people lists. ' +
+      'Use "job_status" with enrichmentId to resolve queued person jobs. Prefer enrichFields over legacy requiredFields.',
+    parameters: DenchEnrichParameters,
+    execute: (_toolCallId: string, params: Record<string, unknown>) =>
+      executeDenchEnrich(gatewayUrl, apiKey, params),
   } as AnyAgentTool);
 }

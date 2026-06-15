@@ -3,6 +3,9 @@
   "name": "PostHog LLM Analytics",
   "description": "Captures LLM generations, tool calls, and user feedback into PostHog AI",
   "version": "1.0.0",
+  "activation": {
+    "onStartup": true
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -6,7 +6,7 @@ export function DeprecationBanner() {
       role="status"
       aria-live="polite"
       data-testid="deprecation-banner"
-      className="relative z-[10000] border-b px-4 py-2 sm:px-6"
+      className="relative z-[10000] shrink-0 border-b px-4 py-2 sm:px-6"
       style={{
         background: "var(--color-deprecation-bg)",
         borderColor: "var(--color-deprecation-border)",

@@ -66,15 +66,17 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="antialiased">
+      <body className="flex h-dvh flex-col overflow-hidden antialiased">
         <DeprecationBanner />
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          <Suspense fallback={null}>
-            <PostHogProvider anonymousId={anonymousId} personInfo={personInfo ?? undefined} privacyMode={privacyMode}>
-              {children}
-            </PostHogProvider>
-          </Suspense>
-        </ThemeProvider>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+            <Suspense fallback={null}>
+              <PostHogProvider anonymousId={anonymousId} personInfo={personInfo ?? undefined} privacyMode={privacyMode}>
+                {children}
+              </PostHogProvider>
+            </Suspense>
+          </ThemeProvider>
+        </div>
       </body>
     </html>
   );

@@ -27,104 +27,68 @@ vi.mock("@/lib/integrations", () => ({
   })),
 }));
 
+// Keep the real field-mapping helper (enrichment-columns.ts depends on it) while
+// stubbing the network-touching gateway functions.
+vi.mock("@/lib/dench-gateway-enrichment", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/dench-gateway-enrichment")>(
+    "@/lib/dench-gateway-enrichment",
+  );
+  return {
+    ...actual,
+    gatewayPersonContact: vi.fn(),
+    gatewayCompanySearch: vi.fn(),
+    pollEnrichmentJobWithTimeout: vi.fn(),
+  };
+});
+
+function mockDuckDb(
+  duckdbQueryOnFile: ReturnType<typeof vi.fn>,
+  opts: { inputField: { name: string; type: string }; inputValue: string | null },
+) {
+  duckdbQueryOnFile.mockImplementation((_dbFile: string, sql: string) => {
+    if (sql.includes("SELECT id FROM objects WHERE name")) {
+      return [{ id: "obj_1" }] as never;
+    }
+    if (sql.includes("SELECT id, name, type FROM fields")) {
+      return [{ id: "input_1", ...opts.inputField }] as never;
+    }
+    if (sql.includes("SELECT id FROM fields WHERE id")) {
+      return [{ id: "field_1" }] as never;
+    }
+    if (sql.includes("FROM entries e")) {
+      return [{ entry_id: "entry_1", input_value: opts.inputValue }] as never;
+    }
+    if (sql.includes("COUNT(*) as cnt")) {
+      return [{ cnt: 0 }] as never;
+    }
+    return [] as never;
+  });
+}
+
 describe("workspace enrichment route", () => {
   beforeEach(async () => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
     const { duckdbExecOnFile, duckdbQueryOnFile } = await import("@/lib/workspace");
     vi.mocked(duckdbExecOnFile).mockReset();
     vi.mocked(duckdbQueryOnFile).mockReset();
+    const gateway = await import("@/lib/dench-gateway-enrichment");
+    vi.mocked(gateway.gatewayPersonContact).mockReset();
+    vi.mocked(gateway.gatewayCompanySearch).mockReset();
+    vi.mocked(gateway.pollEnrichmentJobWithTimeout).mockReset();
   });
 
-  it("forwards requiredFields for people enrichment derived from the apollo path", async () => {
-    const { duckdbQueryOnFile } = await import("@/lib/workspace");
-    vi.mocked(duckdbQueryOnFile).mockImplementation((_dbFile: string, sql: string) => {
-      if (sql.includes("SELECT id FROM objects WHERE name")) {
-        return [{ id: "obj_1" }] as never;
-      }
-      if (sql.includes("SELECT id, name, type FROM fields")) {
-        return [{ id: "input_1", name: "email", type: "email" }] as never;
-      }
-      if (sql.includes("SELECT id FROM fields WHERE id")) {
-        return [{ id: "field_1" }] as never;
-      }
-      if (sql.includes("FROM entries e")) {
-        return [{ entry_id: "entry_1", input_value: "jane@acme.com" }] as never;
-      }
-      if (sql.includes("COUNT(*) as cnt")) {
-        return [{ cnt: 0 }] as never;
-      }
-      return [] as never;
+  it("enriches a LinkedIn person via gatewayPersonContact and writes the cached value", async () => {
+    const { duckdbQueryOnFile, duckdbExecOnFile } = await import("@/lib/workspace");
+    mockDuckDb(vi.mocked(duckdbQueryOnFile), {
+      inputField: { name: "LinkedIn URL", type: "url" },
+      inputValue: "https://www.linkedin.com/in/janedoe",
     });
 
-    global.fetch = vi.fn(async (input, init) => {
-      expect(String(input)).toBe("https://gateway.example.com/v1/enrichment/people");
-      expect(init?.method).toBe("POST");
-      const body = JSON.parse(String(init?.body));
-      expect(body).toMatchObject({
-        email: "jane@acme.com",
-        requiredFields: ["fullName"],
-      });
-      expect(body.mode).toBeUndefined();
-      return new Response(JSON.stringify({ person: { name: "Jane Doe" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
-
-    const { POST } = await import("./route.js");
-    const response = await POST(
-      new Request("http://localhost/api/workspace/objects/leads/enrich", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fieldId: "field_1",
-          apolloPath: "person.name",
-          category: "people",
-          inputFieldName: "email",
-          scope: 1,
-        }),
-      }),
-      { params: Promise.resolve({ name: "leads" }) },
-    );
-
-    expect(response.status).toBe(200);
-    await response.text();
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("forwards LinkedIn people enrichment with gateway-compatible snake_case keys", async () => {
-    const { duckdbQueryOnFile } = await import("@/lib/workspace");
-    vi.mocked(duckdbQueryOnFile).mockImplementation((_dbFile: string, sql: string) => {
-      if (sql.includes("SELECT id FROM objects WHERE name")) {
-        return [{ id: "obj_1" }] as never;
-      }
-      if (sql.includes("SELECT id, name, type FROM fields")) {
-        return [{ id: "input_1", name: "LinkedIn URL", type: "url" }] as never;
-      }
-      if (sql.includes("SELECT id FROM fields WHERE id")) {
-        return [{ id: "field_1" }] as never;
-      }
-      if (sql.includes("FROM entries e")) {
-        return [{ entry_id: "entry_1", input_value: "https://www.linkedin.com/in/markrachapoom" }] as never;
-      }
-      if (sql.includes("COUNT(*) as cnt")) {
-        return [{ cnt: 0 }] as never;
-      }
-      return [] as never;
+    const { gatewayPersonContact } = await import("@/lib/dench-gateway-enrichment");
+    vi.mocked(gatewayPersonContact).mockResolvedValue({
+      ok: true,
+      result: { kind: "person", person: { person: { name: "Jane Doe" } } },
     });
-
-    global.fetch = vi.fn(async (_input, init) => {
-      const body = JSON.parse(String(init?.body));
-      expect(body).toMatchObject({
-        linkedin_url: "https://www.linkedin.com/in/markrachapoom",
-        requiredFields: ["fullName"],
-      });
-      expect(body.mode).toBeUndefined();
-      return new Response(JSON.stringify({ person: { name: "Mark Rachapoom" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
 
     const { POST } = await import("./route.js");
     const response = await POST(
@@ -143,43 +107,231 @@ describe("workspace enrichment route", () => {
     );
 
     expect(response.status).toBe(200);
-    await response.text();
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const text = await response.text();
+    expect(gatewayPersonContact).toHaveBeenCalledTimes(1);
+    const [, , params] = vi.mocked(gatewayPersonContact).mock.calls[0];
+    // person.name maps to the Apollo `fullName` token, which has no contact-field
+    // mapping, so we send no enrichFields narrowing and let the gateway run its
+    // default backfill rather than forcing a work_emails-only request.
+    expect(params).toMatchObject({
+      linkedinUrl: "https://www.linkedin.com/in/janedoe",
+    });
+    expect(params.enrichFields).toBeUndefined();
+    // Value extracted and written back, surfaced as a progress event.
+    expect(text).toContain('"type":"progress"');
+    expect(text).toContain("Jane Doe");
+    expect(vi.mocked(duckdbExecOnFile)).toHaveBeenCalled();
   });
 
-  it("forwards requiredFields as a CSV query param for company enrichment", async () => {
+  it("polls queued LinkedIn jobs and writes the polled value", async () => {
     const { duckdbQueryOnFile } = await import("@/lib/workspace");
-    vi.mocked(duckdbQueryOnFile).mockImplementation((_dbFile: string, sql: string) => {
-      if (sql.includes("SELECT id FROM objects WHERE name")) {
-        return [{ id: "obj_1" }] as never;
-      }
-      if (sql.includes("SELECT id, name, type FROM fields")) {
-        return [{ id: "input_1", name: "website", type: "url" }] as never;
-      }
-      if (sql.includes("SELECT id FROM fields WHERE id")) {
-        return [{ id: "field_1" }] as never;
-      }
-      if (sql.includes("FROM entries e")) {
-        return [{ entry_id: "entry_1", input_value: "https://acme.com" }] as never;
-      }
-      if (sql.includes("COUNT(*) as cnt")) {
-        return [{ cnt: 0 }] as never;
-      }
-      return [] as never;
+    mockDuckDb(vi.mocked(duckdbQueryOnFile), {
+      inputField: { name: "LinkedIn URL", type: "url" },
+      inputValue: "https://www.linkedin.com/in/markrachapoom",
     });
 
-    global.fetch = vi.fn(async (input, init) => {
-      const url = new URL(String(input));
-      expect(url.origin + url.pathname).toBe("https://gateway.example.com/v1/enrichment/company");
-      expect(url.searchParams.get("domain")).toBe("acme.com");
-      expect(url.searchParams.get("requiredFields")).toBe("name");
-      expect(url.searchParams.get("mode")).toBeNull();
-      expect(init?.method).toBe("GET");
-      return new Response(JSON.stringify({ organization: { name: "Acme" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
+    const { gatewayPersonContact, pollEnrichmentJobWithTimeout } = await import(
+      "@/lib/dench-gateway-enrichment"
+    );
+    vi.mocked(gatewayPersonContact).mockResolvedValue({
+      ok: true,
+      result: {
+        kind: "queued",
+        enrichmentId: "job_1",
+        status: "queued",
+        pollPath: "/v1/enrichment/jobs/job_1",
+      },
+    });
+    vi.mocked(pollEnrichmentJobWithTimeout).mockResolvedValue({
+      ok: true,
+      person: { person: { name: "Mark Rachapoom" } },
+    });
+
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      new Request("http://localhost/api/workspace/objects/leads/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fieldId: "field_1",
+          apolloPath: "person.name",
+          category: "people",
+          inputFieldName: "LinkedIn URL",
+          scope: 1,
+        }),
+      }),
+      { params: Promise.resolve({ name: "leads" }) },
+    );
+
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(pollEnrichmentJobWithTimeout).toHaveBeenCalledWith(
+      "https://gateway.example.com",
+      "dc-key",
+      "job_1",
+    );
+    expect(text).toContain("Mark Rachapoom");
+  });
+
+  it("emits pending + error events when a queued job is still pending after polling", async () => {
+    const { duckdbQueryOnFile } = await import("@/lib/workspace");
+    mockDuckDb(vi.mocked(duckdbQueryOnFile), {
+      inputField: { name: "LinkedIn URL", type: "url" },
+      inputValue: "https://www.linkedin.com/in/pending",
+    });
+
+    const { gatewayPersonContact, pollEnrichmentJobWithTimeout } = await import(
+      "@/lib/dench-gateway-enrichment"
+    );
+    vi.mocked(gatewayPersonContact).mockResolvedValue({
+      ok: true,
+      result: {
+        kind: "queued",
+        enrichmentId: "job_2",
+        status: "queued",
+        pollPath: "/v1/enrichment/jobs/job_2",
+      },
+    });
+    vi.mocked(pollEnrichmentJobWithTimeout).mockResolvedValue({
+      ok: false,
+      error: "Enrichment still pending",
+      pending: true,
+    });
+
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      new Request("http://localhost/api/workspace/objects/leads/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fieldId: "field_1",
+          apolloPath: "person.name",
+          category: "people",
+          inputFieldName: "LinkedIn URL",
+          scope: 1,
+        }),
+      }),
+      { params: Promise.resolve({ name: "leads" }) },
+    );
+
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain('"type":"pending"');
+    expect(text).toContain('"enrichmentId":"job_2"');
+    expect(text).toContain("Enrichment still pending");
+  });
+
+  it("rejects an email input field for people enrichment before touching the gateway", async () => {
+    // Email is no longer an eligible people identifier (the gateway resolves
+    // contacts from LinkedIn URLs), so an email-typed input field is rejected at
+    // validation rather than failing per-row downstream.
+    const { duckdbQueryOnFile } = await import("@/lib/workspace");
+    mockDuckDb(vi.mocked(duckdbQueryOnFile), {
+      inputField: { name: "email", type: "email" },
+      inputValue: "jane@acme.com",
+    });
+
+    const { gatewayPersonContact } = await import("@/lib/dench-gateway-enrichment");
+
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      new Request("http://localhost/api/workspace/objects/leads/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fieldId: "field_1",
+          apolloPath: "person.name",
+          category: "people",
+          inputFieldName: "email",
+          scope: 1,
+        }),
+      }),
+      { params: Promise.resolve({ name: "leads" }) },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Input field 'email' is not supported for people enrichment.",
+    });
+    expect(gatewayPersonContact).not.toHaveBeenCalled();
+  });
+
+  it("rejects email values that slip through a LinkedIn-typed field", async () => {
+    // A LinkedIn-typed field passes validation, but a per-row value that is an
+    // email (not a LinkedIn URL) must not be sent to the contact endpoint.
+    const { duckdbQueryOnFile } = await import("@/lib/workspace");
+    mockDuckDb(vi.mocked(duckdbQueryOnFile), {
+      inputField: { name: "LinkedIn URL", type: "url" },
+      inputValue: "jane@acme.com",
+    });
+
+    const { gatewayPersonContact } = await import("@/lib/dench-gateway-enrichment");
+
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      new Request("http://localhost/api/workspace/objects/leads/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fieldId: "field_1",
+          apolloPath: "person.name",
+          category: "people",
+          inputFieldName: "LinkedIn URL",
+          scope: 1,
+        }),
+      }),
+      { params: Promise.resolve({ name: "leads" }) },
+    );
+
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(gatewayPersonContact).not.toHaveBeenCalled();
+    expect(text).toContain("People enrichment requires a LinkedIn URL");
+  });
+
+  it("skips unknown people identifiers instead of treating them as a LinkedIn URL", async () => {
+    const { duckdbQueryOnFile } = await import("@/lib/workspace");
+    mockDuckDb(vi.mocked(duckdbQueryOnFile), {
+      inputField: { name: "LinkedIn URL", type: "url" },
+      inputValue: "Jane Example",
+    });
+
+    const { gatewayPersonContact } = await import("@/lib/dench-gateway-enrichment");
+
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      new Request("http://localhost/api/workspace/objects/leads/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fieldId: "field_1",
+          apolloPath: "person.name",
+          category: "people",
+          inputFieldName: "LinkedIn URL",
+          scope: 1,
+        }),
+      }),
+      { params: Promise.resolve({ name: "leads" }) },
+    );
+
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(gatewayPersonContact).not.toHaveBeenCalled();
+    expect(text).toContain("Unsupported people identifier");
+  });
+
+  it("enriches a company via gatewayCompanySearch using the extracted domain", async () => {
+    const { duckdbQueryOnFile } = await import("@/lib/workspace");
+    mockDuckDb(vi.mocked(duckdbQueryOnFile), {
+      inputField: { name: "website", type: "url" },
+      inputValue: "https://www.acme.com",
+    });
+
+    const { gatewayCompanySearch } = await import("@/lib/dench-gateway-enrichment");
+    vi.mocked(gatewayCompanySearch).mockResolvedValue({
+      ok: true,
+      company: { name: "Acme" },
+    });
 
     const { POST } = await import("./route.js");
     const response = await POST(
@@ -198,8 +350,48 @@ describe("workspace enrichment route", () => {
     );
 
     expect(response.status).toBe(200);
-    await response.text();
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const text = await response.text();
+    expect(gatewayCompanySearch).toHaveBeenCalledWith(
+      "https://gateway.example.com",
+      "dc-key",
+      "acme.com",
+      1,
+    );
+    expect(text).toContain("Acme");
+  });
+
+  it("surfaces gateway invalid_required_field errors in SSE error events", async () => {
+    const { duckdbQueryOnFile } = await import("@/lib/workspace");
+    mockDuckDb(vi.mocked(duckdbQueryOnFile), {
+      inputField: { name: "LinkedIn URL", type: "url" },
+      inputValue: "https://www.linkedin.com/in/janedoe",
+    });
+
+    const { gatewayPersonContact } = await import("@/lib/dench-gateway-enrichment");
+    vi.mocked(gatewayPersonContact).mockResolvedValue({
+      ok: false,
+      error: "Unknown required fields: foo",
+    });
+
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      new Request("http://localhost/api/workspace/objects/leads/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fieldId: "field_1",
+          apolloPath: "person.name",
+          category: "people",
+          inputFieldName: "LinkedIn URL",
+          scope: 1,
+        }),
+      }),
+      { params: Promise.resolve({ name: "leads" }) },
+    );
+
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain("Unknown required fields: foo");
   });
 
   it("rejects non-integer numeric scope values", async () => {
@@ -220,35 +412,31 @@ describe("workspace enrichment route", () => {
     );
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({
-      error: "Invalid scope.",
-    });
+    await expect(response.json()).resolves.toMatchObject({ error: "Invalid scope." });
   });
 
-  it("skips unknown people identifiers instead of sending them as email", async () => {
+  it("narrows the entries SQL to the supplied entryIds", async () => {
     const { duckdbQueryOnFile } = await import("@/lib/workspace");
+    const seenSqls: string[] = [];
     vi.mocked(duckdbQueryOnFile).mockImplementation((_dbFile: string, sql: string) => {
-      if (sql.includes("SELECT id FROM objects WHERE name")) {
-        return [{ id: "obj_1" }] as never;
-      }
+      seenSqls.push(sql);
+      if (sql.includes("SELECT id FROM objects WHERE name")) return [{ id: "obj_1" }] as never;
       if (sql.includes("SELECT id, name, type FROM fields")) {
-        return [{ id: "input_1", name: "email", type: "email" }] as never;
+        return [{ id: "input_1", name: "LinkedIn URL", type: "url" }] as never;
       }
-      if (sql.includes("SELECT id FROM fields WHERE id")) {
-        return [{ id: "field_1" }] as never;
-      }
+      if (sql.includes("SELECT id FROM fields WHERE id")) return [{ id: "field_1" }] as never;
       if (sql.includes("FROM entries e")) {
-        return [{ entry_id: "entry_1", input_value: "Jane Example" }] as never;
+        return [{ entry_id: "entry_2", input_value: "https://www.linkedin.com/in/bob" }] as never;
       }
-      if (sql.includes("COUNT(*) as cnt")) {
-        return [{ cnt: 0 }] as never;
-      }
+      if (sql.includes("COUNT(*) as cnt")) return [{ cnt: 0 }] as never;
       return [] as never;
     });
 
-    global.fetch = vi.fn(async () => {
-      throw new Error("fetch should not be called for unsupported people identifiers");
-    }) as typeof fetch;
+    const { gatewayPersonContact } = await import("@/lib/dench-gateway-enrichment");
+    vi.mocked(gatewayPersonContact).mockResolvedValue({
+      ok: true,
+      result: { kind: "person", person: { person: { name: "Bob" } } },
+    });
 
     const { POST } = await import("./route.js");
     const response = await POST(
@@ -259,8 +447,9 @@ describe("workspace enrichment route", () => {
           fieldId: "field_1",
           apolloPath: "person.name",
           category: "people",
-          inputFieldName: "email",
-          scope: 1,
+          inputFieldName: "LinkedIn URL",
+          scope: "all",
+          entryIds: ["entry_2", "entry_4"],
         }),
       }),
       { params: Promise.resolve({ name: "leads" }) },
@@ -268,92 +457,24 @@ describe("workspace enrichment route", () => {
 
     expect(response.status).toBe(200);
     await response.text();
-    expect(global.fetch).not.toHaveBeenCalled();
+    const entrySql = seenSqls.find((s) => s.includes("FROM entries e"));
+    expect(entrySql).toMatch(/AND e\.id IN \('entry_2','entry_4'\)/);
+    expect(gatewayPersonContact).toHaveBeenCalledTimes(1);
   });
 
-  it(
-    "narrows the entries SQL to the supplied entryIds (drives the row-selection bulk-Enrich path)",
-    async () => {
-      const { duckdbQueryOnFile } = await import("@/lib/workspace");
-      const seenSqls: string[] = [];
-      vi.mocked(duckdbQueryOnFile).mockImplementation((_dbFile: string, sql: string) => {
-        seenSqls.push(sql);
-        if (sql.includes("SELECT id FROM objects WHERE name")) {
-          return [{ id: "obj_1" }] as never;
-        }
-        if (sql.includes("SELECT id, name, type FROM fields")) {
-          return [{ id: "input_1", name: "email", type: "email" }] as never;
-        }
-        if (sql.includes("SELECT id FROM fields WHERE id")) {
-          return [{ id: "field_1" }] as never;
-        }
-        if (sql.includes("FROM entries e")) {
-          // Mirror what the SQL would actually return: only the selected entry.
-          return [{ entry_id: "entry_2", input_value: "bob@acme.com" }] as never;
-        }
-        if (sql.includes("COUNT(*) as cnt")) {
-          return [{ cnt: 0 }] as never;
-        }
-        return [] as never;
-      });
-
-      global.fetch = vi.fn(async () =>
-        new Response(JSON.stringify({ person: { name: "Bob" } }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      ) as typeof fetch;
-
-      const { POST } = await import("./route.js");
-      const response = await POST(
-        new Request("http://localhost/api/workspace/objects/leads/enrich", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fieldId: "field_1",
-            apolloPath: "person.name",
-            category: "people",
-            inputFieldName: "email",
-            scope: "all",
-            entryIds: ["entry_2", "entry_4"],
-          }),
-        }),
-        { params: Promise.resolve({ name: "leads" }) },
-      );
-
-      expect(response.status).toBe(200);
-      await response.text();
-
-      const entrySql = seenSqls.find((s) => s.includes("FROM entries e"));
-      expect(entrySql).toBeDefined();
-      // The IN-clause must be present and contain ONLY the supplied IDs.
-      expect(entrySql).toMatch(/AND e\.id IN \('entry_2','entry_4'\)/);
-      // Exactly one upstream Apollo call — the one whose entry_id matched.
-      expect(global.fetch).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("composes entryIds with scope='empty' so 'enrich the selected rows that are still empty' works", async () => {
+  it("composes entryIds with scope='empty' so the two filters intersect", async () => {
     const { duckdbQueryOnFile } = await import("@/lib/workspace");
     const seenSqls: string[] = [];
     vi.mocked(duckdbQueryOnFile).mockImplementation((_dbFile: string, sql: string) => {
       seenSqls.push(sql);
-      if (sql.includes("SELECT id FROM objects WHERE name")) {
-        return [{ id: "obj_1" }] as never;
-      }
+      if (sql.includes("SELECT id FROM objects WHERE name")) return [{ id: "obj_1" }] as never;
       if (sql.includes("SELECT id, name, type FROM fields")) {
-        return [{ id: "input_1", name: "email", type: "email" }] as never;
+        return [{ id: "input_1", name: "LinkedIn URL", type: "url" }] as never;
       }
-      if (sql.includes("SELECT id FROM fields WHERE id")) {
-        return [{ id: "field_1" }] as never;
-      }
-      if (sql.includes("FROM entries e")) {
-        return [] as never;
-      }
+      if (sql.includes("SELECT id FROM fields WHERE id")) return [{ id: "field_1" }] as never;
+      if (sql.includes("FROM entries e")) return [] as never;
       return [] as never;
     });
-
-    global.fetch = vi.fn() as typeof fetch;
 
     const { POST } = await import("./route.js");
     await POST(
@@ -364,7 +485,7 @@ describe("workspace enrichment route", () => {
           fieldId: "field_1",
           apolloPath: "person.name",
           category: "people",
-          inputFieldName: "email",
+          inputFieldName: "LinkedIn URL",
           scope: "empty",
           entryIds: ["entry_1"],
         }),
@@ -373,13 +494,11 @@ describe("workspace enrichment route", () => {
     );
 
     const entrySql = seenSqls.find((s) => s.includes("FROM entries e"));
-    expect(entrySql).toBeDefined();
     expect(entrySql).toContain("AND e.id IN ('entry_1')");
-    // 'empty' filter still applied — the two filters compose, they don't replace.
     expect(entrySql).toContain("AND e.id NOT IN");
   });
 
-  it("rejects entryIds that contain SQL-injection characters (validated before reaching the IN clause)", async () => {
+  it("rejects entryIds that contain SQL-injection characters", async () => {
     const { POST } = await import("./route.js");
     const response = await POST(
       new Request("http://localhost/api/workspace/objects/leads/enrich", {
@@ -398,15 +517,12 @@ describe("workspace enrichment route", () => {
     );
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({
-      error: "Invalid entry ID.",
-    });
+    await expect(response.json()).resolves.toMatchObject({ error: "Invalid entry ID." });
   });
 
-  it("rejects entryIds payloads that exceed the cap (huge IN clauses are abuse-shaped)", async () => {
+  it("rejects entryIds payloads that exceed the cap", async () => {
     const { POST } = await import("./route.js");
     const tooMany = Array.from({ length: 5001 }, (_, i) => `entry_${i}`);
-
     const response = await POST(
       new Request("http://localhost/api/workspace/objects/leads/enrich", {
         method: "POST",
@@ -429,27 +545,19 @@ describe("workspace enrichment route", () => {
     });
   });
 
-  it("treats an empty entryIds array as 'no narrowing' so the client doesn't have to special-case empty selections", async () => {
+  it("treats an empty entryIds array as 'no narrowing'", async () => {
     const { duckdbQueryOnFile } = await import("@/lib/workspace");
     const seenSqls: string[] = [];
     vi.mocked(duckdbQueryOnFile).mockImplementation((_dbFile: string, sql: string) => {
       seenSqls.push(sql);
-      if (sql.includes("SELECT id FROM objects WHERE name")) {
-        return [{ id: "obj_1" }] as never;
-      }
+      if (sql.includes("SELECT id FROM objects WHERE name")) return [{ id: "obj_1" }] as never;
       if (sql.includes("SELECT id, name, type FROM fields")) {
-        return [{ id: "input_1", name: "email", type: "email" }] as never;
+        return [{ id: "input_1", name: "LinkedIn URL", type: "url" }] as never;
       }
-      if (sql.includes("SELECT id FROM fields WHERE id")) {
-        return [{ id: "field_1" }] as never;
-      }
-      if (sql.includes("FROM entries e")) {
-        return [] as never;
-      }
+      if (sql.includes("SELECT id FROM fields WHERE id")) return [{ id: "field_1" }] as never;
+      if (sql.includes("FROM entries e")) return [] as never;
       return [] as never;
     });
-
-    global.fetch = vi.fn() as typeof fetch;
 
     const { POST } = await import("./route.js");
     await POST(
@@ -460,7 +568,7 @@ describe("workspace enrichment route", () => {
           fieldId: "field_1",
           apolloPath: "person.name",
           category: "people",
-          inputFieldName: "email",
+          inputFieldName: "LinkedIn URL",
           scope: "all",
           entryIds: [],
         }),
@@ -469,61 +577,6 @@ describe("workspace enrichment route", () => {
     );
 
     const entrySql = seenSqls.find((s) => s.includes("FROM entries e"));
-    expect(entrySql).toBeDefined();
     expect(entrySql).not.toContain("AND e.id IN");
-  });
-
-  it("surfaces gateway invalid_required_field errors in SSE error events", async () => {
-    const { duckdbQueryOnFile } = await import("@/lib/workspace");
-    vi.mocked(duckdbQueryOnFile).mockImplementation((_dbFile: string, sql: string) => {
-      if (sql.includes("SELECT id FROM objects WHERE name")) {
-        return [{ id: "obj_1" }] as never;
-      }
-      if (sql.includes("SELECT id, name, type FROM fields")) {
-        return [{ id: "input_1", name: "email", type: "email" }] as never;
-      }
-      if (sql.includes("SELECT id FROM fields WHERE id")) {
-        return [{ id: "field_1" }] as never;
-      }
-      if (sql.includes("FROM entries e")) {
-        return [{ entry_id: "entry_1", input_value: "jane@acme.com" }] as never;
-      }
-      if (sql.includes("COUNT(*) as cnt")) {
-        return [{ cnt: 0 }] as never;
-      }
-      return [] as never;
-    });
-
-    global.fetch = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          error: {
-            code: "invalid_required_field",
-            message: "Unknown required fields: foo",
-          },
-        }),
-        { status: 400, headers: { "content-type": "application/json" } },
-      ),
-    ) as typeof fetch;
-
-    const { POST } = await import("./route.js");
-    const response = await POST(
-      new Request("http://localhost/api/workspace/objects/leads/enrich", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fieldId: "field_1",
-          apolloPath: "person.name",
-          category: "people",
-          inputFieldName: "email",
-          scope: 1,
-        }),
-      }),
-      { params: Promise.resolve({ name: "leads" }) },
-    );
-
-    expect(response.status).toBe(200);
-    const text = await response.text();
-    expect(text).toContain("Unknown required fields: foo");
   });
 });

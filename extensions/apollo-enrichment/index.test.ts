@@ -5,367 +5,397 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import register from "./index.js";
 
 function writeAuthProfiles(stateDir: string, key: string): void {
-  const authDir = path.join(stateDir, "agents", "main", "agent");
-  mkdirSync(authDir, { recursive: true });
-  writeFileSync(
-    path.join(authDir, "auth-profiles.json"),
-    JSON.stringify({
-      version: 1,
-      profiles: {
-        "dench-cloud:default": { type: "api_key", provider: "dench-cloud", key },
-      },
-    }),
-  );
+	const authDir = path.join(stateDir, "agents", "main", "agent");
+	mkdirSync(authDir, { recursive: true });
+	writeFileSync(
+		path.join(authDir, "auth-profiles.json"),
+		JSON.stringify({
+			version: 1,
+			profiles: {
+				"dench-cloud:default": { type: "api_key", provider: "dench-cloud", key },
+			},
+		}),
+	);
 }
 
 function writeOpenClawConfig(stateDir: string): void {
-  writeFileSync(
-    path.join(stateDir, "openclaw.json"),
-    JSON.stringify({
-      models: {
-        providers: {
-          "dench-cloud": {},
-        },
-      },
-    }),
-  );
-  writeFileSync(
-    path.join(stateDir, ".dench-integrations.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      apollo: {},
-    }),
-  );
+	writeFileSync(
+		path.join(stateDir, "openclaw.json"),
+		JSON.stringify({
+			models: {
+				providers: {
+					"dench-cloud": {},
+				},
+			},
+		}),
+	);
 }
 
 function createApi() {
-  const tools: any[] = [];
-  const api = {
-    config: {
-      plugins: {
-        entries: {
-          "dench-ai-gateway": {
-            config: {
-              enabled: true,
-              gatewayUrl: "https://gateway.example.com",
-            },
-          },
-        },
-      },
-    },
-    registerTool(tool: any) {
-      tools.push(tool);
-    },
-    logger: {
-      info: vi.fn(),
-    },
-  } as unknown as Parameters<typeof register>[0];
-  return {
-    api,
-    tools,
-  };
+	const tools: any[] = [];
+	const api = {
+		config: {
+			plugins: {
+				entries: {
+					"dench-ai-gateway": {
+						config: {
+							enabled: true,
+							gatewayUrl: "https://gateway.example.com",
+						},
+					},
+				},
+			},
+		},
+		registerTool(tool: any) {
+			tools.push(tool);
+		},
+		logger: {
+			info: vi.fn(),
+		},
+	} as unknown as Parameters<typeof register>[0];
+	return { api, tools };
 }
 
-describe("apollo-enrichment requiredFields", () => {
-  const originalFetch = globalThis.fetch;
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  let stateDir: string | undefined;
+function jsonResponse(payload: unknown, status = 200): Response {
+	return new Response(JSON.stringify(payload), {
+		status,
+		headers: { "content-type": "application/json" },
+	});
+}
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    vi.restoreAllMocks();
-    if (stateDir) {
-      rmSync(stateDir, { recursive: true, force: true });
-      stateDir = undefined;
-    }
-    if (originalStateDir !== undefined) {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    } else {
-      delete process.env.OPENCLAW_STATE_DIR;
-    }
-  });
+/** Pull the single fetch call's parsed url/method/headers/body. */
+function readFetchCall(fetchMock: ReturnType<typeof vi.fn>) {
+	expect(fetchMock).toHaveBeenCalledTimes(1);
+	const [input, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
+	const url = new URL(String(input));
+	return {
+		path: url.origin + url.pathname,
+		search: url.searchParams,
+		method: init?.method,
+		headers: (init?.headers ?? {}) as Record<string, string>,
+		body: init?.body ? JSON.parse(String(init.body)) : undefined,
+	};
+}
 
-  it(
-    "REGRESSION: substitutes the canonical requiredFields when the caller omits — " +
-      "never emits a no-list payload that hits the gateway's deprecated default-backfill (Apollo `mode` removal)",
-    async () => {
-      stateDir = mkdtempSync(path.join(os.tmpdir(), "apollo-enrichment-state-"));
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      writeAuthProfiles(stateDir, "dc-key");
-      writeOpenClawConfig(stateDir);
+function setupState(): string {
+	const stateDir = mkdtempSync(path.join(os.tmpdir(), "dench-enrich-state-"));
+	process.env.OPENCLAW_STATE_DIR = stateDir;
+	writeAuthProfiles(stateDir, "dc-key");
+	writeOpenClawConfig(stateDir);
+	return stateDir;
+}
 
-      globalThis.fetch = vi.fn(async (input, init) => {
-        expect(String(input)).toBe("https://gateway.example.com/v1/enrichment/people");
-        expect(init?.method).toBe("POST");
-        const body = JSON.parse(String(init?.body));
-        expect(body).toMatchObject({ email: "jane@acme.com" });
-        // mode is NEVER sent; requiredFields is ALWAYS sent (default or caller-supplied).
-        expect(body.mode).toBeUndefined();
-        expect(Array.isArray(body.requiredFields)).toBe(true);
-        // The canonical people allowlist mirrors PEOPLE_ENRICHMENT_COLUMNS in
-        // apps/web/lib/enrichment-columns.ts; keep these in sync.
-        expect(body.requiredFields).toEqual([
-          "fullName",
-          "email",
-          "headline",
-          "linkedinID",
-          "URLs",
-          "phone",
-          "location",
-        ]);
-        return new Response(JSON.stringify({ person: { id: "p1" } }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }) as typeof fetch;
+describe("dench_enrich tool", () => {
+	const originalFetch = globalThis.fetch;
+	const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+	let stateDir: string | undefined;
 
-      const { api, tools } = createApi();
-      register(api);
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		vi.restoreAllMocks();
+		if (stateDir) {
+			rmSync(stateDir, { recursive: true, force: true });
+			stateDir = undefined;
+		}
+		if (originalStateDir !== undefined) {
+			process.env.OPENCLAW_STATE_DIR = originalStateDir;
+		} else {
+			delete process.env.OPENCLAW_STATE_DIR;
+		}
+	});
 
-      expect(tools).toHaveLength(1);
-      await tools[0].execute("call_1", {
-        action: "people",
-        email: "jane@acme.com",
-      });
+	it("registers a single tool named dench_enrich", () => {
+		stateDir = setupState();
+		const { api, tools } = createApi();
+		register(api);
+		expect(tools).toHaveLength(1);
+		expect(tools[0].name).toBe("dench_enrich");
+	});
 
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    },
-  );
+	it("does not register the tool when no Dench Cloud API key is present", () => {
+		stateDir = mkdtempSync(path.join(os.tmpdir(), "dench-enrich-state-"));
+		process.env.OPENCLAW_STATE_DIR = stateDir;
+		writeOpenClawConfig(stateDir); // no auth profiles written
+		const { api, tools } = createApi();
+		register(api);
+		expect(tools).toHaveLength(0);
+	});
 
-  it("forwards camelCase requiredFields to people enrichment when callers provide them", async () => {
-    stateDir = mkdtempSync(path.join(os.tmpdir(), "apollo-enrichment-state-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    writeAuthProfiles(stateDir, "dc-key");
-    writeOpenClawConfig(stateDir);
+	it("person contact: returns a cached person immediately", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({
+				status: "completed",
+				enrichmentId: null,
+				queuedCount: 0,
+				cachedResults: [
+					{ full_name: "Jane Doe", emails: [{ email: "jane@acme.com" }], phones: [] },
+				],
+			}),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    globalThis.fetch = vi.fn(async (_input, init) => {
-      const body = JSON.parse(String(init?.body));
-      expect(body).toMatchObject({
-        email: "jane@acme.com",
-        requiredFields: ["phone", "headline"],
-      });
-      expect(body.mode).toBeUndefined();
-      return new Response(JSON.stringify({ person: { id: "p1" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
+		const { api, tools } = createApi();
+		register(api);
+		const result = await tools[0].execute("call_1", {
+			action: "people",
+			linkedinUrl: "https://www.linkedin.com/in/janedoe",
+		});
 
-    const { api, tools } = createApi();
-    register(api);
+		const call = readFetchCall(fetchMock);
+		expect(call.path).toBe("https://gateway.example.com/v1/enrichment/person/contact");
+		expect(call.method).toBe("POST");
+		expect(call.headers.authorization).toBe("Bearer dc-key");
+		expect(call.headers["x-dench-scope"]).toBe("data:enrichment");
+		expect(call.body.preferCache).toBe(true);
+		expect(call.body.contacts[0]).toMatchObject({
+			linkedinUrl: "https://www.linkedin.com/in/janedoe",
+		});
+		// Hybrid async: cache hit returns the person, not a job id.
+		expect(result.details.person).toBeDefined();
+		expect(result.details.person.email).toBe("jane@acme.com");
+		expect(result.details.enrichmentId).toBeUndefined();
+	});
 
-    await tools[0].execute("call_1", {
-      action: "people",
-      email: "jane@acme.com",
-      requiredFields: ["phone", "headline"],
-    });
+	it("person contact: returns enrichmentId + pollPath for a queued job (no blocking poll)", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({
+				status: "queued",
+				enrichmentId: "job_123",
+				queuedCount: 1,
+				cachedResults: [],
+			}),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-  });
+		const { api, tools } = createApi();
+		register(api);
+		const result = await tools[0].execute("call_1", {
+			action: "people",
+			firstName: "Mark",
+			lastName: "Rachapoom",
+			organizationName: "Dench",
+		});
 
-  it("accepts the snake_case required_fields legacy alias", async () => {
-    stateDir = mkdtempSync(path.join(os.tmpdir(), "apollo-enrichment-state-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    writeAuthProfiles(stateDir, "dc-key");
-    writeOpenClawConfig(stateDir);
+		// The agent tool must NOT poll — exactly one request is made.
+		const call = readFetchCall(fetchMock);
+		expect(call.body.contacts[0]).toMatchObject({
+			firstName: "Mark",
+			lastName: "Rachapoom",
+			companyName: "Dench",
+		});
+		expect(result.details.enrichmentId).toBe("job_123");
+		expect(result.details.status).toBe("queued");
+		expect(result.details.pollPath).toBe("/v1/enrichment/jobs/job_123");
+		expect(result.details.person).toBeUndefined();
+	});
 
-    globalThis.fetch = vi.fn(async (_input, init) => {
-      expect(JSON.parse(String(init?.body))).toMatchObject({
-        email: "jane@acme.com",
-        requiredFields: ["phone"],
-      });
-      return new Response(JSON.stringify({ person: { id: "p1" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
+	it("person contact: maps legacy requiredFields to enrichFields tokens", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({ status: "queued", enrichmentId: "job_1", queuedCount: 1, cachedResults: [] }),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const { api, tools } = createApi();
-    register(api);
+		const { api, tools } = createApi();
+		register(api);
+		await tools[0].execute("call_1", {
+			action: "people",
+			linkedinUrl: "https://www.linkedin.com/in/janedoe",
+			requiredFields: ["phone", "email"],
+		});
 
-    await tools[0].execute("call_1", {
-      action: "people",
-      email: "jane@acme.com",
-      required_fields: ["phone"],
-    });
+		const call = readFetchCall(fetchMock);
+		expect(call.body.contacts[0].enrichFields).toEqual(
+			expect.arrayContaining(["phones", "work_emails"]),
+		);
+	});
 
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-  });
+	it("person contact: omits enrichFields entirely when the caller supplies none", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({ status: "queued", enrichmentId: "job_1", queuedCount: 1, cachedResults: [] }),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-  it("sends person name inputs with gateway-compatible snake_case keys", async () => {
-    stateDir = mkdtempSync(path.join(os.tmpdir(), "apollo-enrichment-state-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    writeAuthProfiles(stateDir, "dc-key");
-    writeOpenClawConfig(stateDir);
+		const { api, tools } = createApi();
+		register(api);
+		await tools[0].execute("call_1", {
+			action: "people",
+			linkedinUrl: "https://www.linkedin.com/in/janedoe",
+		});
 
-    globalThis.fetch = vi.fn(async (_input, init) => {
-      const body = JSON.parse(String(init?.body));
-      expect(body).toMatchObject({
-        first_name: "Mark",
-        last_name: "Rachapoom",
-        organization_name: "Dench",
-        linkedin_url: "https://www.linkedin.com/in/markrachapoom",
-      });
-      expect(body.mode).toBeUndefined();
-      return new Response(JSON.stringify({ person: { email: "mark@dench.com" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
+		const call = readFetchCall(fetchMock);
+		// No legacy default-backfill list; the gateway applies its own default.
+		expect(call.body.contacts[0].enrichFields).toBeUndefined();
+		expect(call.body.contacts[0].requiredFields).toBeUndefined();
+		expect(call.body.mode).toBeUndefined();
+	});
 
-    const { api, tools } = createApi();
-    register(api);
+	it("person contact: rejects email-only input without calling the gateway", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () => jsonResponse({}));
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    await tools[0].execute("call_1", {
-      action: "people",
-      firstName: "Mark",
-      lastName: "Rachapoom",
-      organizationName: "Dench",
-      linkedinUrl: "https://www.linkedin.com/in/markrachapoom",
-    });
+		const { api, tools } = createApi();
+		register(api);
+		const result = await tools[0].execute("call_1", {
+			action: "people",
+			email: "jane@acme.com",
+		});
 
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-  });
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(result.details.error).toMatch(/linkedinUrl OR firstName\+lastName/);
+	});
 
-  it("sends people search filters with gateway-compatible snake_case keys", async () => {
-    stateDir = mkdtempSync(path.join(os.tmpdir(), "apollo-enrichment-state-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    writeAuthProfiles(stateDir, "dc-key");
-    writeOpenClawConfig(stateDir);
+	it("company: looks up by domain via /company/search", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({ companies: [{ name: "Acme", website: "acme.com" }] }),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    globalThis.fetch = vi.fn(async (_input, init) => {
-      expect(JSON.parse(String(init?.body))).toMatchObject({
-        person_titles: ["Founder"],
-        person_locations: ["San Francisco"],
-        organization_domains: ["dench.com"],
-        per_page: 5,
-      });
-      return new Response(JSON.stringify({ people: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
+		const { api, tools } = createApi();
+		register(api);
+		const result = await tools[0].execute("call_1", {
+			action: "company",
+			domain: "acme.com",
+		});
 
-    const { api, tools } = createApi();
-    register(api);
+		const call = readFetchCall(fetchMock);
+		expect(call.path).toBe("https://gateway.example.com/v1/enrichment/company/search");
+		expect(call.method).toBe("POST");
+		expect(call.body).toMatchObject({ domain: "acme.com", limit: 1 });
+		expect(result.details.company.name).toBe("Acme");
+		expect(result.details.organization).toBeDefined();
+	});
 
-    await tools[0].execute("call_1", {
-      action: "people_search",
-      personTitles: ["Founder"],
-      personLocations: ["San Francisco"],
-      organizationDomains: ["dench.com"],
-      perPage: 5,
-    });
+	it("company: errors without a domain and does not call the gateway", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () => jsonResponse({}));
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-  });
+		const { api, tools } = createApi();
+		register(api);
+		const result = await tools[0].execute("call_1", { action: "company" });
 
-  it(
-    "REGRESSION: substitutes the canonical requiredFields when the caller omits for company enrichment — " +
-      "same gateway 'mode' deprecation; the chat-side path was the symptomatic one but company has the same shape",
-    async () => {
-      stateDir = mkdtempSync(path.join(os.tmpdir(), "apollo-enrichment-state-"));
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      writeAuthProfiles(stateDir, "dc-key");
-      writeOpenClawConfig(stateDir);
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(result.details.error).toMatch(/requires a domain/);
+	});
 
-      globalThis.fetch = vi.fn(async (input, init) => {
-        const url = new URL(String(input));
-        expect(url.origin + url.pathname).toBe("https://gateway.example.com/v1/enrichment/company");
-        expect(url.searchParams.get("domain")).toBe("acme.com");
-        expect(url.searchParams.get("mode")).toBeNull();
-        const csv = url.searchParams.get("requiredFields");
-        expect(csv).not.toBeNull();
-        expect(csv?.split(",")).toEqual([
-          "name",
-          "website",
-          "industryList",
-          "linkedinID",
-          "totalFunding",
-          "founded",
-        ]);
-        expect(init?.method).toBe("GET");
-        return new Response(JSON.stringify({ organization: { id: "o1" } }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }) as typeof fetch;
+	it("people_search: posts gateway filter body and returns people", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () => jsonResponse({ people: [{ id: "p1" }] }));
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-      const { api, tools } = createApi();
-      register(api);
+		const { api, tools } = createApi();
+		register(api);
+		const result = await tools[0].execute("call_1", {
+			action: "people_search",
+			personTitles: ["Founder"],
+			personLocations: ["San Francisco"],
+			organizationDomains: ["dench.com"],
+			perPage: 5,
+		});
 
-      await tools[0].execute("call_1", {
-        action: "company",
-        domain: "acme.com",
-      });
+		const call = readFetchCall(fetchMock);
+		expect(call.path).toBe("https://gateway.example.com/v1/enrichment/people/search");
+		expect(call.body).toMatchObject({
+			titles: ["Founder"],
+			locations: ["San Francisco"],
+			companyDomain: "dench.com",
+			limit: 5,
+		});
+		// people_search must NOT carry person-contact enrichFields/requiredFields.
+		expect(call.body.requiredFields).toBeUndefined();
+		expect(result.details.people).toHaveLength(1);
+	});
 
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    },
-  );
+	it("job_status: resolves a succeeded job into person/people", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({
+				enrichmentId: "job_123",
+				status: "succeeded",
+				people: [{ full_name: "Jane Doe", emails: [{ email: "jane@acme.com" }] }],
+			}),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-  it(
-    "people_search does NOT receive a requiredFields default (different gateway endpoint, " +
-      "different params; sending one would 400)",
-    async () => {
-      stateDir = mkdtempSync(path.join(os.tmpdir(), "apollo-enrichment-state-"));
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      writeAuthProfiles(stateDir, "dc-key");
-      writeOpenClawConfig(stateDir);
+		const { api, tools } = createApi();
+		register(api);
+		const result = await tools[0].execute("call_1", {
+			action: "job_status",
+			enrichmentId: "job_123",
+		});
 
-      globalThis.fetch = vi.fn(async (input, init) => {
-        expect(String(input)).toBe(
-          "https://gateway.example.com/v1/enrichment/people/search",
-        );
-        const body = JSON.parse(String(init?.body));
-        expect(body.requiredFields).toBeUndefined();
-        expect(body.mode).toBeUndefined();
-        return new Response(JSON.stringify({ people: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }) as typeof fetch;
+		const call = readFetchCall(fetchMock);
+		expect(call.path).toBe("https://gateway.example.com/v1/enrichment/jobs/job_123");
+		expect(call.method).toBe("GET");
+		expect(result.details.status).toBe("succeeded");
+		expect(result.details.person.email).toBe("jane@acme.com");
+		expect(result.details.people).toHaveLength(1);
+	});
 
-      const { api, tools } = createApi();
-      register(api);
+	it("job_status: reports a still-pending job", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({ enrichmentId: "job_123", status: "pending" }),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-      await tools[0].execute("call_1", {
-        action: "people_search",
-        personTitles: ["Founder"],
-      });
+		const { api, tools } = createApi();
+		register(api);
+		const result = await tools[0].execute("call_1", {
+			action: "job_status",
+			enrichmentId: "job_123",
+		});
 
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    },
-  );
+		expect(result.details.status).toBe("pending");
+		expect(result.details.message).toMatch(/retry job_status/);
+	});
 
-  it("forwards CSV requiredFields query param for company enrichment", async () => {
-    stateDir = mkdtempSync(path.join(os.tmpdir(), "apollo-enrichment-state-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    writeAuthProfiles(stateDir, "dc-key");
-    writeOpenClawConfig(stateDir);
+	it("job_status: errors when enrichmentId is missing", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () => jsonResponse({}));
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    globalThis.fetch = vi.fn(async (input, init) => {
-      const url = new URL(String(input));
-      expect(url.origin + url.pathname).toBe("https://gateway.example.com/v1/enrichment/company");
-      expect(url.searchParams.get("domain")).toBe("acme.com");
-      expect(url.searchParams.get("requiredFields")).toBe("description,headcount,industryList");
-      expect(url.searchParams.get("mode")).toBeNull();
-      expect(init?.method).toBe("GET");
-      return new Response(JSON.stringify({ organization: { id: "o1" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
+		const { api, tools } = createApi();
+		register(api);
+		const result = await tools[0].execute("call_1", { action: "job_status" });
 
-    const { api, tools } = createApi();
-    register(api);
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(result.details.error).toMatch(/requires enrichmentId/);
+	});
 
-    expect(tools).toHaveLength(1);
-    await tools[0].execute("call_1", {
-      action: "company",
-      domain: "acme.com",
-      requiredFields: ["description", "headcount", "industryList"],
-    });
+	it("rejects unknown actions", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () => jsonResponse({}));
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-  });
+		const { api, tools } = createApi();
+		register(api);
+		const result = await tools[0].execute("call_1", { action: "nope" });
+
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(result.details.error).toMatch(/Unknown action/);
+	});
+
+	it("surfaces gateway provider-unavailable errors", async () => {
+		stateDir = setupState();
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({ error: { code: "provider_unavailable" } }, 503),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+		const { api, tools } = createApi();
+		register(api);
+		const result = await tools[0].execute("call_1", {
+			action: "people",
+			linkedinUrl: "https://www.linkedin.com/in/janedoe",
+		});
+
+		expect(result.details.error).toBe("Gateway providers unavailable");
+	});
 });
