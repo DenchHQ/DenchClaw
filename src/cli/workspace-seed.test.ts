@@ -33,6 +33,15 @@ function createPackageRoot(tempDir: string): string {
   return pkgRoot;
 }
 
+const LEGACY_BROWSER_SKILL_CONTENT = `---
+name: browser-automation
+---
+
+# Browser Automation
+
+- **COPY THAT USER'S DEFAULT CHROME PROFILE, INTO YOUR OWN CHROME PROFILE**
+`;
+
 describe("seedWorkspaceFromAssets", () => {
   let tempDir: string;
 
@@ -176,6 +185,36 @@ describe("syncManagedSkills", () => {
     expect(existsSync(workspaceDir)).toBe(false);
     syncManagedSkills({ workspaceDirs: [workspaceDir], packageRoot });
     expect(existsSync(workspaceDir)).toBe(true);
+  });
+
+  it("removes the retired bundled browser skill from existing workspaces", () => {
+    const packageRoot = createPackageRoot(tempDir);
+    const workspaceDir = path.join(tempDir, "workspace-prune");
+    const browserSkillDir = path.join(workspaceDir, "skills", "browser");
+    mkdirSync(browserSkillDir, { recursive: true });
+    writeFileSync(
+      path.join(browserSkillDir, "SKILL.md"),
+      LEGACY_BROWSER_SKILL_CONTENT,
+      "utf-8",
+    );
+
+    syncManagedSkills({ workspaceDirs: [workspaceDir], packageRoot });
+
+    expect(existsSync(browserSkillDir)).toBe(false);
+  });
+
+  it("preserves user-authored browser skills in existing workspaces", () => {
+    const packageRoot = createPackageRoot(tempDir);
+    const workspaceDir = path.join(tempDir, "workspace-custom-browser");
+    const browserSkillDir = path.join(workspaceDir, "skills", "browser");
+    const customSkillPath = path.join(browserSkillDir, "SKILL.md");
+    mkdirSync(browserSkillDir, { recursive: true });
+    writeFileSync(customSkillPath, "# My custom browser skill\n", "utf-8");
+
+    syncManagedSkills({ workspaceDirs: [workspaceDir], packageRoot });
+
+    expect(existsSync(customSkillPath)).toBe(true);
+    expect(readFileSync(customSkillPath, "utf-8")).toBe("# My custom browser skill\n");
   });
 
   it("syncs skills into multiple workspace directories", () => {

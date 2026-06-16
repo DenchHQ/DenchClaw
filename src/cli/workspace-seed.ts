@@ -1,4 +1,13 @@
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 export type SeedField = {
@@ -144,6 +153,46 @@ export const MANAGED_SKILLS: ReadonlyArray<{ name: string; templatePaths?: boole
   { name: "dench-integrations" },
 ];
 
+const RETIRED_MANAGED_SKILLS: ReadonlyArray<{
+  name: string;
+  matchesLegacySkill: (content: string) => boolean;
+}> = [
+  {
+    name: "browser",
+    matchesLegacySkill: (content) =>
+      content.includes("name: browser-automation") &&
+      content.includes("COPY THAT USER'S DEFAULT CHROME PROFILE"),
+  },
+];
+
+function pruneRetiredManagedSkills(workspaceDir: string): void {
+  for (const skill of RETIRED_MANAGED_SKILLS) {
+    const skillDir = path.join(workspaceDir, "skills", skill.name);
+    const skillFile = path.join(skillDir, "SKILL.md");
+    if (!existsSync(skillFile)) {
+      continue;
+    }
+
+    try {
+      const visibleEntries = readdirSync(skillDir).filter(
+        (entry) => entry !== ".DS_Store" && entry !== "Thumbs.db",
+      );
+      if (visibleEntries.length !== 1 || visibleEntries[0] !== "SKILL.md") {
+        continue;
+      }
+
+      const content = readFileSync(skillFile, "utf-8");
+      if (!skill.matchesLegacySkill(content)) {
+        continue;
+      }
+
+      rmSync(skillDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup for retired managed skills.
+    }
+  }
+}
+
 export function seedSkill(
   params: { workspaceDir: string; packageRoot: string },
   skill: { name: string; templatePaths?: boolean },
@@ -227,6 +276,7 @@ export function syncManagedSkills(params: {
   const synced: string[] = [];
   for (const workspaceDir of params.workspaceDirs) {
     mkdirSync(workspaceDir, { recursive: true });
+    pruneRetiredManagedSkills(workspaceDir);
     for (const skill of MANAGED_SKILLS) {
       seedSkill({ workspaceDir, packageRoot: params.packageRoot }, skill);
     }
