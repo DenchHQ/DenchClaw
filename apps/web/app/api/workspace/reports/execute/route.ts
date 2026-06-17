@@ -44,7 +44,7 @@ export async function POST(req: Request) {
   const finalSql = injectFilters(sql, filterClauses);
 
   try {
-		const rows = await duckdbQueryAsync(finalSql);
+    const rows = await duckdbQueryAsync(finalSql);
     trackServer("report_executed");
     return Response.json({ rows, sql: finalSql });
   } catch (err) {
