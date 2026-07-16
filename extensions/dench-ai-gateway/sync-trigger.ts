@@ -79,7 +79,7 @@ export function resolveSyncTriggerConfig(api: any): UnknownRecord | undefined {
   const pluginConfig = asRecord(asRecord(asRecord(api?.config)?.plugins)?.entries)?.[
     "dench-ai-gateway"
   ];
-  return asRecord(asRecord(pluginConfig)?.config?.["syncTrigger"] as unknown);
+  return asRecord((asRecord(pluginConfig)?.config as Record<string, unknown>)?.["syncTrigger"] as unknown);
 }
 
 function resolveStateDir(): string {
