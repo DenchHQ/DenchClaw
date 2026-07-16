@@ -496,9 +496,7 @@ export type EmailBodyHydrationAttemptedFile = {
   updatedAt: string;
 };
 
-function defaultEmailBodyHydrationAttempted(): EmailBodyHydrationAttemptedFile {
-  return { version: 1, attempted: [], updatedAt: nowIso() };
-}
+
 
 export function readEmailBodyHydrationAttempted(
   workspaceName?: string | null,
@@ -534,7 +532,7 @@ export function markEmailBodyHydrationAttempted(
   }
   const next: EmailBodyHydrationAttemptedFile = {
     version: 1,
-    attempted: Array.from(current).sort(),
+    attempted: Array.from(current).toSorted(),
     updatedAt: nowIso(),
   };
   writeJsonFileAtomic(denchClawFilePath(EMAIL_BODY_HYDRATION_FILENAME, workspaceName), next);
