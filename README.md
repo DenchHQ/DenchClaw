@@ -146,8 +146,8 @@ pnpm web:dev
 MIT Licensed. Fork it, extend it, make it yours.
 
 <p align="center">
-  <a href="https://star-history.com/?repos=DenchHQ%2FDenchClaw&type=date&legend=top-left">
-    <img src="https://api.star-history.com/image?repos=DenchHQ/DenchClaw&type=date&legend=top-left" alt="Star History" width="620" />
+  <a href="https://star-history.dera.page/#DenchHQ/DenchClaw&type=date&legend=top-left">
+    <img src="https://star-history.dera.page/svg?repos=DenchHQ/DenchClaw&type=date&legend=top-left" alt="Star History" width="620" />
   </a>
 </p>
 
