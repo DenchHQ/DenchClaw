@@ -14,7 +14,6 @@ import {
 	readFileSync,
 	writeFileSync,
 	existsSync,
-	mkdirSync,
 } from "node:fs";
 import {
 	access,
@@ -874,7 +873,7 @@ function readLatestTranscriptAssistantTurn(
 		const details = asRecord(msg.details);
 		const result: Record<string, unknown> = {
 			...(text ? { text: text.slice(0, 500) } : {}),
-			...(details ?? {}),
+			...(details),
 		};
 		if (Object.keys(result).length === 0) {
 			continue;
@@ -930,7 +929,6 @@ function wireSubscribeOnlyProcess(
 	let currentStatusReasoningLabel: string | null = null;
 	let textStarted = false;
 	let reasoningStarted = false;
-	let everSentResponseActivity = false;
 	let statusReasoningActive = false;
 	let agentErrorReported = false;
 	const liveStats = {
@@ -1151,7 +1149,6 @@ function wireSubscribeOnlyProcess(
 		const toolCallId = typeof ev.data?.toolCallId === "string" ? ev.data.toolCallId : "";
 		const toolName = typeof ev.data?.name === "string" ? ev.data.name : "";
 			if (phase === "start") {
-				everSentResponseActivity = true;
 				liveStats.toolStartCount += 1;
 				closeReasoning();
 				closeText();
@@ -1163,12 +1160,10 @@ function wireSubscribeOnlyProcess(
 			} else if (phase === "update") {
 				const partialResult = extractToolResult(ev.data?.partialResult);
 				if (partialResult) {
-					everSentResponseActivity = true;
 					const output = buildToolOutput(partialResult);
 					emit({ type: "tool-output-partial", toolCallId, output });
 				}
 			} else if (phase === "result") {
-				everSentResponseActivity = true;
 				const isError = ev.data?.isError === true;
 				const result = extractToolResult(ev.data?.result);
 				if (isError) {

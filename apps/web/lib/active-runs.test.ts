@@ -1585,7 +1585,7 @@ describe("active-runs", () => {
 		}
 
 		it("tracks multiple sessions independently", async () => {
-			const { childA, childB, prefix, startRun, abortRun, hasActiveRun, getActiveRun } =
+			const { childA: _childA, childB: _childB, prefix, startRun, abortRun, hasActiveRun, getActiveRun } =
 				await setupConcurrent();
 
 			const idA = `${prefix}-track-a`;
@@ -1604,7 +1604,7 @@ describe("active-runs", () => {
 		});
 
 		it("delivers events to the correct session without cross-contamination", async () => {
-			const { childA, childB, prefix, startRun, abortRun, subscribeToRun } =
+			const { childA, childB, prefix, startRun, _abortRun, subscribeToRun } =
 				await setupConcurrent();
 
 			const idA = `${prefix}-iso-a`;
@@ -1615,8 +1615,8 @@ describe("active-runs", () => {
 
 			const eventsA: SseEvent[] = [];
 			const eventsB: SseEvent[] = [];
-			subscribeToRun(idA, (e) => { if (e) eventsA.push(e); }, { replay: false });
-			subscribeToRun(idB, (e) => { if (e) eventsB.push(e); }, { replay: false });
+			subscribeToRun(idA, (e) => { if (e) { eventsA.push(e); } }, { replay: false });
+			subscribeToRun(idB, (e) => { if (e) { eventsB.push(e); } }, { replay: false });
 
 			childA._writeLine({
 				event: "agent", stream: "assistant",
@@ -1643,7 +1643,7 @@ describe("active-runs", () => {
 		});
 
 		it("completing one session does not affect the other", async () => {
-			const { childA, childB, prefix, startRun, abortRun, hasActiveRun, getActiveRun } =
+			const { childA, childB, prefix, startRun, _abortRun, hasActiveRun, getActiveRun } =
 				await setupConcurrent();
 
 			const idA = `${prefix}-comp-a`;
@@ -1699,7 +1699,7 @@ describe("active-runs", () => {
 			startRun({ sessionId: idB, message: "second", agentSessionId: idB });
 
 			const eventsB: SseEvent[] = [];
-			subscribeToRun(idB, (e) => { if (e) eventsB.push(e); }, { replay: false });
+			subscribeToRun(idB, (e) => { if (e) { eventsB.push(e); } }, { replay: false });
 
 			childA.stdout.end();
 			await new Promise((r) => setTimeout(r, 50));
@@ -1733,8 +1733,8 @@ describe("active-runs", () => {
 
 			const eventsA: SseEvent[] = [];
 			const eventsB: SseEvent[] = [];
-			subscribeToRun(idA, (e) => { if (e) eventsA.push(e); }, { replay: false });
-			subscribeToRun(idB, (e) => { if (e) eventsB.push(e); }, { replay: false });
+			subscribeToRun(idA, (e) => { if (e) { eventsA.push(e); } }, { replay: false });
+			subscribeToRun(idB, (e) => { if (e) { eventsB.push(e); } }, { replay: false });
 
 			childA._writeLine({
 				event: "agent", stream: "tool",
